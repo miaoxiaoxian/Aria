@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ListMusic, Maximize2, Minus, Radio, Search, Sparkles, UserRound, X } from "lucide-react";
+import { ListMusic, Maximize2, Minus, Radio, Search, Settings2, Sparkles, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   CloudSurface,
@@ -10,63 +10,49 @@ import {
   StatsSurface,
 } from "@/components/music/CollectionSurfaces";
 import { LibrarySurface as LibrarySurfacePanel } from "@/components/music/LibrarySurface";
-import { HomeSurface } from "@/components/music/HomeSurfaces";
+import { HomeSidePanel, HomeSurface, HistorySurface } from "@/components/music/HomeSurfaces";
 import { SearchSurface, ArtistsSurface } from "@/components/music/DiscoverySurfaces";
 import { PlayerSidePanel, QueueList } from "@/components/music/PlayerSidePanels";
 import { ImmersivePlayerView, PlayerSurface } from "@/components/music/PlayerViews";
 import { FloatingNav } from "@/components/music/FloatingNav";
-import { AccountPanel, SettingsPanel } from "@/components/music/SettingsPanels";
+import { AccountPanel, OnboardingDialog, SettingsPanel } from "@/components/music/SettingsPanels";
 import ariaIconUrl from "../build/icon.png";
 import { navItems, type Track, type ViewId } from "@/data/music";
-import {
-  createLocalArtistSummaries,
-  mergeArtists,
-  providerArtistToUiArtist,
-  type ArtistSummary,
-} from "@/lib/artists";
-import type { NativeAudioState } from "@/lib/audioTypes";
-import { createArtworkOverrideDataUrl, readCachedArtworkOverride, writeCachedArtworkOverride } from "@/lib/artworkOverrides";
-import { memoryLimits, trimRecordCache, trimStringSet, warmupBatchLimits } from "@/lib/memoryCache";
+import type { ArtistSummary } from "@/lib/artists";
+import { useAudioEngine } from "@/hooks/useAudioEngine";
+import { useDiscovery } from "@/hooks/useDiscovery";
+import { useLocalLibrary } from "@/hooks/useLocalLibrary";
+import { useLyricsSync } from "@/hooks/useLyricsSync";
+import { useNeteaseData } from "@/hooks/useNeteaseData";
+import { memoryLimits, trimStringSet } from "@/lib/memoryCache";
 import {
   createPlayerCacheSnapshot,
   readPlayHistory,
   writePlayHistory,
   type PlayHistoryEntry,
 } from "@/lib/playHistory";
-import {
-  api,
-  type ApiScannedTrack,
-  type NeteaseAccountSummary,
-  type ProviderPlaylist,
-  type ProviderTrack,
-} from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   extractDominantColors,
-  formatDuration,
+  createCachedQueueSnapshots,
   mergeTracks,
-  normalizeQuality,
   readCachedAudioSettings,
-  readCachedLyrics,
   readCachedPlayerState,
   splitArtistNames,
-  trimTrackCache,
-  writeCachedAudioSettings,
-  writeCachedLyrics,
   writeCachedPlayerState,
   type AudioOutputMode,
   type CoverPalette,
   type PlayerSideView,
   type QualityLevel,
 } from "@/lib/playerPresentation";
-import { materializeQueueIds, orderedQueueIds, playableTracks } from "@/lib/playQueue";
-import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
+import { commitPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
+import { materializeQueueIds, mergeQueueTrackSources, orderedQueueIds, playableTracks } from "@/lib/playQueue";
+import { matchesShortcut, readKeyboardShortcuts, writeKeyboardShortcuts, type KeyboardShortcuts } from "@/lib/keyboardShortcuts";
 import { sourceLabel } from "@/lib/trackLabels";
+import { getTrackSearchSignature, idleTrack, localTrackToUiTrack } from "@/lib/trackMappers";
+import { getBoundedCoverUrl } from "@/components/music/shared";
 import { cn } from "@/lib/utils";
-type SearchBundle = {
-  localTracks: Track[];
-  neteaseTracks: Track[];
-  artists: ArtistSummary[];
-};
+
 const dragRegionStyle = { WebkitAppRegion: "drag" } as CSSProperties;
 const noDragRegionStyle = { WebkitAppRegion: "no-drag" } as CSSProperties;
 
@@ -76,148 +62,45 @@ const panelVariants = {
   exit: { opacity: 0, y: -16 },
 };
 
-const localCoverPalettes = [
-  "linear-gradient(135deg, #d9e7f6 0%, #5e8ab8 48%, #182338 100%)",
-  "linear-gradient(135deg, #f4d4ce 0%, #c6796d 50%, #241a1a 100%)",
-  "linear-gradient(135deg, #d7f1e5 0%, #5aa894 50%, #172823 100%)",
-  "linear-gradient(135deg, #e4ddf5 0%, #8680b4 50%, #202036 100%)",
-];
-
-const idleTrack: Track = {
-  id: "idle",
-  title: "暂无播放",
-  artist: "扫描本地目录或同步网易云",
-  album: "Aria",
-  duration: "--:--",
-  quality: "320K",
-  source: "local",
-  cover: "linear-gradient(135deg, #eef1f5 0%, #aeb7c6 50%, #586273 100%)",
-  accent: "#7b8494",
-  waveform: [18, 28, 22, 34, 26, 38, 24, 32, 28, 36, 22, 30],
-  lyricStatus: "missing",
-  lyrics: [{ time: "00:00", text: "暂无歌词" }],
-};
-
-function localTrackToUiTrack(track: ApiScannedTrack, index: number): Track {
-  const cachedLyrics = readCachedLyrics(track.id);
-  const artworkOverride = readCachedArtworkOverride(track.id);
-  return {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    albumArtist: track.albumArtist ?? null,
-    duration: formatDuration(track.duration),
-    quality: normalizeQuality(track.quality),
-    source: "local",
-    streamUrl: track.streamUrl ? api.resolveUrl(track.streamUrl) : api.getTrackStreamUrl(track.id),
-    coverUrl: artworkOverride ?? (track.hasCover ? api.getTrackCoverUrl(track.id) : undefined),
-    trackNumber: track.trackNumber ?? null,
-    discNumber: track.discNumber ?? null,
-    bitrate: track.bitrate ?? null,
-    sampleRate: track.sampleRate ?? null,
-    bpm: null,
-    libraryRoot: track.libraryRoot,
-    mediaKind: track.mediaKind ?? "file",
-    nativeDevice: track.nativeDevice ?? null,
-    nativeStart: track.nativeStart ?? null,
-    nativeEnd: track.nativeEnd ?? null,
-    cdReadQuality: track.cdReadQuality ?? "high",
-    requiresNativePlayback: track.requiresNativePlayback ?? false,
-    currentLevel: null,
-    availableLevels: [],
-    cover: localCoverPalettes[index % localCoverPalettes.length],
-    accent: ["#5e8ab8", "#c6796d", "#5aa894", "#8680b4"][index % 4],
-    waveform: [28, 42, 64, 38, 72, 54, 46, 82, 58, 36, 68, 48],
-    lyricStatus: cachedLyrics.length ? "linked" : "searchable",
-    lyrics: cachedLyrics.length ? cachedLyrics : [
-      { time: "00:00", text: "本地歌词等待匹配" },
-      { time: "00:15", text: "可以在本地音乐页联网搜词后绑定" },
-      { time: "00:30", text: "绑定后会保存到本地索引" },
-    ],
-  };
-}
-
-function providerTrackToUiTrack(track: ProviderTrack, index: number): Track {
-  const palette = localCoverPalettes[(index + 1) % localCoverPalettes.length];
-  const accent = ["#c6796d", "#5aa894", "#8680b4", "#5e8ab8"][index % 4];
-  const cachedLyrics = readCachedLyrics(`netease:${track.id}`);
-
-  return {
-    id: `netease:${track.id}`,
-    providerId: track.id,
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    duration: formatDuration(track.duration),
-    quality: normalizeQuality(track.quality),
-    source: "netease",
-    streamUrl: track.streamUrl ? api.resolveUrl(track.streamUrl) : undefined,
-    coverUrl: track.coverUrl ? api.getNeteaseCoverUrl(track.coverUrl) : undefined,
-    likedAt: track.likedAt ?? null,
-    bpm: null,
-    bitrate: track.bitrate ?? null,
-    sampleRate: track.sampleRate ?? null,
-    currentLevel: track.currentLevel ?? null,
-    availableLevels: track.availableLevels ?? ["standard", "higher", "exhigh"],
-    cover: palette,
-    accent,
-    waveform: [24, 40, 66, 48, 78, 56, 36, 84, 62, 42, 70, 52],
-    lyricStatus: cachedLyrics.length ? "linked" : "searchable",
-    lyrics: cachedLyrics.length ? cachedLyrics : [
-      { time: "00:00", text: "歌词等待同步" },
-      { time: "00:15", text: "网易云歌曲已接入真实账号数据" },
-      { time: "00:30", text: "后续会按歌曲 ID 同步滚动歌词" },
-    ],
-  };
-}
-
-function getTrackSearchSignature(tracks: Track[]) {
-  return tracks
-    .map((track) => [track.id, track.title, track.artist, track.album, track.quality].join("\u0000"))
-    .join("\u0001");
-}
-
-function isLikedPlaylist(playlist: ProviderPlaylist | null | undefined, index?: number) {
-  if (!playlist) return false;
-  return index === 0 || /喜欢|我喜欢|liked|favorite/i.test(playlist.name);
-}
-
 export default function App() {
   const [initialPlayerCache] = useState(readCachedPlayerState);
   const [cachedActiveTrackSnapshot] = useState(() => initialPlayerCache.activeTrackSnapshot);
+  const [cachedQueueSnapshots] = useState(() => initialPlayerCache.playQueueSnapshots ?? []);
   const [activeView, setActiveView] = useState<ViewId>("home");
   const [activeTrackId, setActiveTrackId] = useState(
     initialPlayerCache.activeTrackId ?? cachedActiveTrackSnapshot?.id ?? idleTrack.id,
   );
   const [playing, setPlaying] = useState(false);
   const [volume, setVolume] = useState(initialPlayerCache.volume ?? 72);
-  const [currentTime, setCurrentTime] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [shuffleEnabled, setShuffleEnabled] = useState(initialPlayerCache.shuffleEnabled ?? false);
   const [repeatMode, setRepeatMode] = useState<"all" | "one">(initialPlayerCache.repeatMode ?? "all");
   const [playCounts, setPlayCounts] = useState<Record<string, number>>({});
   const [playHistory, setPlayHistory] = useState<PlayHistoryEntry[]>(readPlayHistory);
   const [likedTrackIds, setLikedTrackIds] = useState<Record<string, true>>({});
-  const [neteaseLikedIds, setNeteaseLikedIds] = useState<Record<string, true>>({});
   const [activePalette, setActivePalette] = useState<CoverPalette>({ primary: idleTrack.accent, secondary: "#aeb7c6" });
   const [qualityLevel, setQualityLevel] = useState<QualityLevel>(initialPlayerCache.qualityLevel ?? "lossless");
-  const [localTracks, setLocalTracks] = useState<Track[]>([]);
-  const [neteaseTracks, setNeteaseTracks] = useState<Track[]>([]);
-  const [neteaseLikedTracks, setNeteaseLikedTracks] = useState<Track[]>([]);
-  const [dailyTracks, setDailyTracks] = useState<Track[]>([]);
-  const [roamTracks, setRoamTracks] = useState<Track[]>([]);
-  const [playlistTracks, setPlaylistTracks] = useState<Track[]>([]);
   const [playQueueIds, setPlayQueueIds] = useState<string[]>(initialPlayerCache.playQueueIds ?? []);
-  const [selectedPlaylist, setSelectedPlaylist] = useState<ProviderPlaylist | null>(null);
-  const [playlistLoading, setPlaylistLoading] = useState(false);
-  const [roamRefreshing, setRoamRefreshing] = useState(false);
-  const [providerPlaylists, setProviderPlaylists] = useState<ProviderPlaylist[]>([]);
-  const [libraryMeta, setLibraryMeta] = useState({ roots: 0, updatedAt: null as string | null });
   const [navOpen, setNavOpen] = useState(false);
-  const [queueExpanded, setQueueExpanded] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(() => {
+    try {
+      const completed = window.localStorage.getItem("aria-onboarding-complete") === "1";
+      const returningUser = Boolean(window.localStorage.getItem("aria-player-state"));
+      return !completed && !returningUser;
+    } catch {
+      return true;
+    }
+  });
+  const [onboardingLocalInfo, setOnboardingLocalInfo] = useState<{ path: string; count: number } | null>(null);
+  const [libraryScanProgress, setLibraryScanProgress] = useState<{
+    phase: string;
+    processed: number;
+    total: number;
+    status: string;
+    error?: string | null;
+  } | null>(null);
+  const [settingsReturnView, setSettingsReturnView] = useState<ViewId>("home");
   const [immersiveOpen, setImmersiveOpen] = useState(false);
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
   const [backgroundEnabled, setBackgroundEnabled] = useState(() => {
@@ -227,75 +110,153 @@ export default function App() {
       return false;
     }
   });
-  const [globalArrowKeysEnabled, setGlobalArrowKeysEnabled] = useState(() => {
-    try {
-      return window.localStorage.getItem("aria-global-arrow-keys") !== "false";
-    } catch {
-      return true;
-    }
-  });
-  const [perfMode, setPerfMode] = useState(() => {
-    try {
-      return window.localStorage.getItem("aria-perf-mode") === "true";
-    } catch {
-      return false;
-    }
-  });
   const [playerSideView, setPlayerSideView] = useState<PlayerSideView>(initialPlayerCache.playerSideView ?? "lyrics");
-  const [neteaseAccount, setNeteaseAccount] = useState<NeteaseAccountSummary | null>(null);
-  const [lyricBindings, setLyricBindings] = useState<Record<string, string>>({});
+  const [lyricDisplayMode, setLyricDisplayMode] = useState<"original" | "bilingual">(() => {
+    try {
+      return window.localStorage.getItem("aria-lyric-display-mode") === "bilingual" ? "bilingual" : "original";
+    } catch {
+      return "original";
+    }
+  });
+  const [keyboardShortcuts, setKeyboardShortcuts] = useState<KeyboardShortcuts>(readKeyboardShortcuts);
   const [query, setQuery] = useState("");
-  const [searchBundle, setSearchBundle] = useState<SearchBundle>({ localTracks: [], neteaseTracks: [], artists: [] });
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [selectedArtist, setSelectedArtist] = useState<ArtistSummary | null>(null);
-  const [artistTracks, setArtistTracks] = useState<Track[]>([]);
-  const [artistAvatarCache, setArtistAvatarCache] = useState<Record<string, string | null>>({});
-  const [folderName, setFolderName] = useState("未选择");
-  const [audioOutputDevices, setAudioOutputDevices] = useState<Array<{ id: string; label: string }>>([]);
-  const [nativeAudioSupported, setNativeAudioSupported] = useState(() => Boolean(window.ariaDesktop?.nativeAudio?.supported));
-  const [nativeAudioState, setNativeAudioState] = useState<NativeAudioState | null>(null);
-  const [selectedSinkId, setSelectedSinkId] = useState(() => readCachedAudioSettings().sinkId ?? "default");
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
+  const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
   const [audioOutputMode, setAudioOutputMode] = useState<AudioOutputMode>(() => readCachedAudioSettings().outputMode ?? "system");
-  const [nativePlaybackFailed, setNativePlaybackFailed] = useState(false);
-  const [nativeAnalyserWakeToken, setNativeAnalyserWakeToken] = useState(0);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
-  const nativeSilenceGainRef = useRef<GainNode | null>(null);
-  const analyserOutputModeRef = useRef<"audible" | "silent" | null>(null);
-  const countedTrackRef = useRef<string | null>(null);
   const navCloseTimer = useRef<number | null>(null);
-  const lyricSyncingRef = useRef<Set<string>>(new Set());
-  const artworkSyncingRef = useRef<Set<string>>(new Set());
-  const localCoverWarmupRef = useRef<Set<string>>(new Set());
-  const immersiveFullscreenRef = useRef(false);
-  const neteaseWarmupRef = useRef<Set<string>>(new Set());
-  const artistRequestRef = useRef<Set<string>>(new Set());
-  const artistAvatarLookupRef = useRef<Set<string>>(new Set());
-  const artistAvatarCacheRef = useRef<Record<string, string | null>>({});
-  const audioErrorRef = useRef({ count: 0, lastAt: 0 });
-  const localTracksRef = useRef<Track[]>([]);
+  const countedTrackRef = useRef<string | null>(null);
   const pendingSeekRef = useRef(0);
   const lastPlayerCacheWriteRef = useRef(0);
-  const nativeLoadedUrlRef = useRef<string | null>(null);
-  const nativeAnalyserDelayUntilRef = useRef(0);
-  const nativeLoadSequenceRef = useRef(0);
-  const lastNativeRenderRef = useRef({ at: 0, position: 0 });
-  const lastCurrentTimeRenderRef = useRef({ at: 0, time: 0 });
   const rendererDiagnosticRef = useRef<Record<string, unknown>>({});
+  const immersiveFullscreenRef = useRef(false);
+  const taskbarClipKeyRef = useRef<string>("");
+  // Track-list states live in this component, but the domain hooks update them
+  // through this indirection because the setters only exist after those hooks.
+  const updateTrackRef = useRef<
+    (trackId: string, updateTrack: (track: Track) => Track, updateOptions?: { includeHistory?: boolean }) => void
+  >(() => undefined);
+  const applyTrackUpdate = useEffectEvent(
+    (
+      trackId: string,
+      updateTrack: (track: Track) => Track,
+      updateOptions?: { includeHistory?: boolean },
+    ) => updateTrackRef.current(trackId, updateTrack, updateOptions),
+  );
+  const activeTrackRef = useRef<Track>(idleTrack);
+
+  const exclusiveMode = audioOutputMode === "exclusive";
+
+  const chooseLocalFolder = useEffectEvent(async () => {
+    const chooseFolder = window.ariaDesktop?.chooseMusicFolder;
+    if (!chooseFolder) {
+      fileInputRef.current?.click();
+      return;
+    }
+    const selectedPath = await chooseFolder();
+    if (!selectedPath) return;
+    try {
+      const result = await scanBackendPath(selectedPath);
+      const summary = result as { folderPath?: string; trackCount?: number } | undefined;
+      setOnboardingLocalInfo({
+        path: summary?.folderPath ?? selectedPath,
+        count: summary?.trackCount ?? 0,
+      });
+    } catch {
+      setOnboardingLocalInfo({ path: selectedPath, count: 0 });
+    }
+  });
+
+  const {
+    localTracks,
+    setLocalTracks,
+    libraryMeta,
+    setLibraryMeta,
+    folderName,
+    setFolderName,
+    artworkSyncingRef,
+    localCoverWarmupRef,
+    warmLocalCoverCache,
+    applyArtworkToTrack,
+    scanBackendPath,
+    scanCdLibrary,
+    replaceLocalArtwork,
+  } = useLocalLibrary({
+    applyTrackUpdate,
+    activeTrackId,
+    shuffleEnabled,
+    setPlayQueueIds,
+    onLibraryOpened: () => setActiveView("local"),
+    onTrackScanned: (trackId) => {
+      pendingSeekRef.current = 0;
+      setActiveTrackId(trackId);
+    },
+    resetPendingSeek: () => {
+      pendingSeekRef.current = 0;
+    },
+    onScanProgress: setLibraryScanProgress,
+  });
+
+  const {
+    neteaseAccount,
+    setNeteaseAccount,
+    neteaseTracks,
+    setNeteaseTracks,
+    neteaseLikedTracks,
+    setNeteaseLikedTracks,
+    dailyTracks,
+    setDailyTracks,
+    roamTracks,
+    setRoamTracks,
+    playlistTracks,
+    setPlaylistTracks,
+    providerPlaylists,
+    setProviderPlaylists,
+    selectedPlaylist,
+    setSelectedPlaylist,
+    playlistLoading,
+    roamRefreshing,
+    neteaseLikedIds,
+    neteaseWarmupRef,
+    applyStreamMetaToTrack,
+    warmNeteaseTrackCache,
+    refreshNeteaseData,
+    refreshRoamData,
+    openPlaylist,
+    toggleNeteaseLike,
+  } = useNeteaseData({
+    applyTrackUpdate,
+    warmupLevel: hifiEnabled ? "jymaster" : qualityLevel,
+    playing,
+    canAutoSelectFirstTrack: activeTrackId === idleTrack.id && !localTracks.length,
+    onAutoSelectTrack: setActiveTrackId,
+    activeView,
+    getActiveTrack: () => activeTrackRef.current,
+    shuffleEnabled,
+    setPlayQueueIds,
+  });
 
   const neteaseConnected = Boolean(neteaseAccount?.connected);
-  const exclusiveMode = audioOutputMode === "exclusive";
-  const desktopExclusiveActive = Boolean(nativeAudioSupported && exclusiveMode);
-  const exclusiveReady = Boolean(desktopExclusiveActive && nativeAudioState?.exclusive);
-  const nativePlaybackVolume = volume;
-  const localSearchSignature = useMemo(() => getTrackSearchSignature(localTracks), [localTracks]);
+
   const allTracks = useMemo(
     () => mergeTracks([...localTracks, ...neteaseTracks, ...roamTracks, ...playlistTracks]),
     [localTracks, neteaseTracks, roamTracks, playlistTracks],
+  );
+  const allTracksById = useMemo(() => {
+    const map = new Map<string, Track>();
+    for (const track of allTracks) map.set(track.id, track);
+    return map;
+  }, [allTracks]);
+  // History snapshots go stale when stream metadata refreshes; render history
+  // rows from the live library so one song shows one bitrate everywhere.
+  const displayHistory = useMemo(
+    () =>
+      playHistory.map((entry) => {
+        const live = allTracksById.get(entry.track.id);
+        return live ? { ...entry, track: live } : entry;
+      }),
+    [playHistory, allTracksById],
   );
   const artistSummaries = useMemo(() => {
     const artists = new Map<string, ArtistSummary & { albums: Set<string>; sources: Set<Track["source"]> }>();
@@ -320,6 +281,9 @@ export default function App() {
         current.sources.add(track.source);
         current.source = current.sources.size > 1 ? "mixed" : current.sources.has("netease") ? "netease" : "local";
         current.avatarUrl = current.avatarUrl ?? (track.source === "netease" ? track.coverUrl : null);
+        if (track.source === "netease" && track.providerId) {
+          current.providerId = current.providerId ?? track.providerId;
+        }
         artists.set(key, current);
       }
     }
@@ -332,36 +296,12 @@ export default function App() {
     requestedActiveTrack ??
     (cachedActiveTrackSnapshot?.id === activeTrackId ? cachedActiveTrackSnapshot : null) ??
     (activeTrackId === idleTrack.id ? allTracks[0] ?? idleTrack : idleTrack);
-  const nativePlaybackRequested = Boolean(
-    nativeAudioSupported && (audioOutputMode !== "system" || activeTrack.requiresNativePlayback),
-  );
-  const nativePlaybackEnabled = Boolean(nativePlaybackRequested && !nativePlaybackFailed);
-  const visualizerPlaying = Boolean(playing);
+  activeTrackRef.current = activeTrack;
   const effectiveQualityLevel = useMemo(() => {
     if (!hifiEnabled || activeTrack.source !== "netease") return qualityLevel;
     const levels = activeTrack.availableLevels ?? [];
     return levels.at(-1) ?? qualityLevel;
   }, [activeTrack.availableLevels, activeTrack.source, hifiEnabled, qualityLevel]);
-  const activeStreamUrl = useMemo(() => {
-    if (!activeTrack.streamUrl) return null;
-    const resolvedUrl = api.resolveUrl(activeTrack.streamUrl);
-    if (activeTrack.source !== "netease") return resolvedUrl;
-
-    const url = new URL(resolvedUrl, window.location.href);
-    url.searchParams.set("level", effectiveQualityLevel);
-    return url.href;
-  }, [activeTrack, effectiveQualityLevel]);
-  const audioElementStreamUrl = useMemo(() => {
-    if (!activeTrack.streamUrl || activeTrack.requiresNativePlayback) return null;
-    const resolvedUrl = api.resolveUrl(activeTrack.streamUrl);
-    if (activeTrack.source !== "netease") return resolvedUrl;
-
-    const url = new URL(resolvedUrl, window.location.href);
-    if (activeTrack.source === "netease") {
-      url.searchParams.set("level", nativePlaybackEnabled ? "exhigh" : effectiveQualityLevel);
-    }
-    return url.href;
-  }, [activeTrack, effectiveQualityLevel, nativePlaybackEnabled]);
   const visibleTracks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return allTracks;
@@ -397,6 +337,43 @@ export default function App() {
     () => mergeTracks([...localLikedTracks, ...neteaseLikedDisplayTracks]),
     [localLikedTracks, neteaseLikedDisplayTracks],
   );
+  const playQueueTracks = useMemo(() => {
+    return mergeQueueTrackSources(playQueueIds, allTracks, cachedQueueSnapshots);
+  }, [allTracks, cachedQueueSnapshots, playQueueIds]);
+  const linkedLyricCount = useMemo(
+    () => allTracks.filter((track) => track.lyricStatus === "linked").length,
+    [allTracks],
+  );
+  const lyricProgress = useMemo(
+    () => (allTracks.length ? Math.round((linkedLyricCount / allTracks.length) * 100) : 0),
+    [allTracks.length, linkedLyricCount],
+  );
+  const localSearchSignature = useMemo(() => getTrackSearchSignature(localTracks), [localTracks]);
+
+  const { lyricBindings, setLyricBindings, applyLyricsToTrack } = useLyricsSync({
+    applyTrackUpdate,
+    activeTrack,
+    localTracks,
+  });
+
+  const {
+    searchBundle,
+    searchLoading,
+    selectedArtist,
+    setSelectedArtist,
+    artistTracks,
+    artistAvatarCache,
+    artistRequestRef,
+    artistAvatarLookupRef,
+  } = useDiscovery({
+    query,
+    localTracks,
+    localSearchSignature,
+    allTracks,
+    artistSummaries,
+    onMergeNeteaseTracks: setNeteaseTracks,
+  });
+
   const contextualQueueTracks = useMemo(() => {
     switch (activeView) {
       case "local":
@@ -419,12 +396,284 @@ export default function App() {
         return [];
     }
   }, [activeView, artistTracks, dailyTracks, likedDisplayTracks, playHistory, playlistTracks, roamTracks, visibleLocalTracks, visibleTracks]);
-  const playQueueTracks = useMemo(() => {
-    const byId = new Map(allTracks.map((track) => [track.id, track]));
-    return playQueueIds
-      .map((id) => byId.get(id))
-      .filter((track): track is Track => Boolean(track?.streamUrl));
-  }, [allTracks, playQueueIds]);
+
+  const hasActiveTrack = activeTrack.id !== idleTrack.id;
+
+  // Gapless playback: the engine appends this entry to mpv's playlist while
+  // the current track finishes, so the advance happens inside mpv.
+  const getNextPreload = useEffectEvent(() => {
+    const resolveUrl = (track: Track): string | null => {
+      if (!track.streamUrl || track.requiresNativePlayback) return null;
+      const resolvedUrl = api.resolveUrl(track.streamUrl);
+      if (track.source !== "netease") return resolvedUrl;
+      const url = new URL(resolvedUrl, window.location.href);
+      const levels = track.availableLevels ?? [];
+      url.searchParams.set("level", hifiEnabled ? (levels.at(-1) ?? qualityLevel) : qualityLevel);
+      return url.href;
+    };
+
+    if (repeatMode === "one") {
+      const current = activeTrackRef.current;
+      const url = hasActiveTrack ? resolveUrl(current) : null;
+      return current.id !== idleTrack.id && url ? { trackId: current.id, url } : null;
+    }
+
+    // Mirror pickRelativeTrack's fallback chain so hero-toggle playback
+    // (which never materializes the queue) still preloads correctly.
+    const queue = playQueueTracks.length ? playQueueTracks : playbackTracks.length ? playbackTracks : visibleTracks;
+    if (!queue.length) return null;
+    const currentIndex = queue.findIndex((track) => track.id === activeTrackId);
+    const next = queue[(currentIndex + 1) % queue.length];
+    if (!next || next.id === activeTrackId) return null;
+    const url = resolveUrl(next);
+    return url ? { trackId: next.id, url } : null;
+  });
+
+  const {
+    audioRef,
+    analyserRef,
+    audioOutputDevices,
+    nativeAudioSupported,
+    nativeAudioState,
+    selectedSinkId,
+    setSelectedSinkId,
+    nativePlaybackEnabled,
+    activeStreamUrl,
+    handleAudioError,
+    resetAudioError,
+  } = useAudioEngine({
+    activeTrack,
+    activeTrackId,
+    idleTrackId: idleTrack.id,
+    effectiveQualityLevel,
+    playing,
+    volume,
+    hifiEnabled,
+    gaplessEnabled,
+    audioOutputMode,
+    pageVisible,
+    analyserEnabled: pageVisible && (activeView === "player" || immersiveOpen),
+    pendingSeekRef,
+    setPlaying,
+    setDurationSeconds,
+    exclusiveMode,
+    durationSeconds,
+    handleTrackEnded,
+    handleNativeTrackAdvanced,
+    pickRelativeTrack,
+    hasMultipleQueueTracks: (playQueueTracks.length || playbackTracks.length) > 1,
+    getNextPreload,
+  });
+
+  const visualizerPlaying = nativePlaybackEnabled
+    ? Boolean(playing || (nativeAudioState?.active && !nativeAudioState.paused))
+    : playing;
+
+  function handleNativeTrackAdvanced(trackId: string) {
+    if (!nativePlaybackEnabled || !trackId || trackId === activeTrack.id) return;
+
+    // The next entry was selected by the native gapless playlist. Resolve it
+    // from the same queue used by preloading so a stale/local track with a
+    // matching title cannot hijack the transition.
+    const queue = playQueueTracks.length ? playQueueTracks : playbackTracks.length ? playbackTracks : visibleTracks;
+    const nextTrack = queue.find((track) => track.id === trackId);
+    if (!nextTrack?.streamUrl) {
+      // A preload can race a queue refresh. Let the normal relative picker
+      // recover from the current queue instead of leaving mpv and React out
+      // of sync indefinitely.
+      handleTrackEnded();
+      return;
+    }
+
+    pendingSeekRef.current = 0;
+    resetPlaybackTime();
+    setDurationSeconds(0);
+    setActiveTrackId(nextTrack.id);
+    setPlaying(true);
+  }
+
+  function pickRelativeTrack(direction: 1 | -1) {
+    const fallbackQueue = playQueueTracks.length ? playQueueTracks : playbackTracks.length ? playbackTracks : visibleTracks;
+    const shouldRefreshShuffleQueue =
+      shuffleEnabled && (!playQueueTracks.length || !playQueueTracks.some((track) => track.id === activeTrack.id));
+    const nextQueueIds = shouldRefreshShuffleQueue
+      ? materializeQueueIds(fallbackQueue, activeTrack.id, true)
+      : orderedQueueIds(playQueueTracks.length ? playQueueTracks : fallbackQueue);
+    const byId = new Map([...playQueueTracks, ...fallbackQueue].map((track) => [track.id, track]));
+    const queue = nextQueueIds.map((id) => byId.get(id)).filter((track): track is Track => Boolean(track));
+    if (!queue.length) return;
+    if (shouldRefreshShuffleQueue) setPlayQueueIds(nextQueueIds);
+    pendingSeekRef.current = 0;
+    const currentIndex = queue.findIndex((track) => track.id === activeTrack.id);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (safeIndex + direction + queue.length) % queue.length;
+    const nextTrack = queue[nextIndex];
+    if (nextTrack.id === activeTrack.id) {
+      if (nativePlaybackEnabled) {
+        seekTo(0);
+      } else if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play().catch(() => setPlaying(false));
+      }
+    }
+    setActiveTrackId(nextTrack.id);
+    resetPlaybackTime();
+    setDurationSeconds(0);
+    setPlaying(true);
+  }
+
+  function restartActiveTrack() {
+    pendingSeekRef.current = 0;
+    resetPlaybackTime();
+    setPlaying(true);
+    if (nativePlaybackEnabled) {
+      window.ariaDesktop?.nativeAudio?.seek?.(0).catch(() => undefined);
+      window.ariaDesktop?.nativeAudio?.setPaused?.(false).catch(() => undefined);
+      return;
+    }
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => setPlaying(false));
+  }
+
+  function handleTrackEnded() {
+    if (repeatMode === "one") {
+      restartActiveTrack();
+      return;
+    }
+    pickRelativeTrack(1);
+  }
+
+  function seekTo(nextTime: number) {
+    if (nativePlaybackEnabled) {
+      pendingSeekRef.current = nextTime;
+      commitPlaybackTime(nextTime, true);
+      window.ariaDesktop?.nativeAudio?.seek?.(nextTime).catch(() => undefined);
+      if (!playing) setPlaying(true);
+      return;
+    }
+
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = nextTime;
+    commitPlaybackTime(nextTime, true);
+    if (!playing) setPlaying(true);
+  }
+
+  function togglePlayback() {
+    if (activeStreamUrl && activeTrack.id !== idleTrack.id) {
+      setPlaying((value) => !value);
+      return;
+    }
+
+    const fallbackTrack = playableTracks(playQueueTracks)[0] ?? playableTracks(contextualQueueTracks)[0] ?? playbackTracks[0];
+    if (fallbackTrack) chooseTrack(fallbackTrack.id);
+  }
+
+  function resolveQueueForTrack(trackId: string, preferredQueue?: Track[]) {
+    const preferredTracks = preferredQueue ? playableTracks(preferredQueue) : [];
+    if (preferredTracks.some((track) => track.id === trackId)) return preferredTracks;
+
+    const currentQueue = playableTracks(contextualQueueTracks);
+    if (activeView !== "home" && activeView !== "player" && currentQueue.some((track) => track.id === trackId)) {
+      return currentQueue;
+    }
+
+    const candidateQueues = [
+      playQueueTracks,
+      dailyTracks,
+      roamTracks,
+      playlistTracks,
+      neteaseLikedDisplayTracks,
+      visibleLocalTracks,
+      visibleTracks,
+    ].map(playableTracks);
+    return candidateQueues.find((tracks) => tracks.some((track) => track.id === trackId)) ?? currentQueue;
+  }
+
+  function chooseTrack(trackId: string, preferredQueue?: Track[]) {
+    const queue = resolveQueueForTrack(trackId, preferredQueue);
+    const preferredTarget = preferredQueue?.find((track) => track.id === trackId && track.streamUrl);
+    // A caller that supplies a source-specific queue must never silently fall
+    // back to a same-named local track if that queue has gone stale.
+    if (preferredQueue && !preferredTarget) return;
+    const targetTrack =
+      preferredTarget ??
+      queue.find((track) => track.id === trackId) ??
+      allTracks.find((track) => track.id === trackId) ??
+      (cachedActiveTrackSnapshot?.id === trackId ? cachedActiveTrackSnapshot : null);
+    if (!targetTrack?.streamUrl) return;
+
+    const playableIds = materializeQueueIds(queue.length ? queue : [targetTrack], trackId, shuffleEnabled);
+    if (playableIds.length) setPlayQueueIds(playableIds);
+    pendingSeekRef.current = 0;
+    setActiveTrackId(trackId);
+    resetPlaybackTime();
+    setDurationSeconds(0);
+    setPlaying(true);
+  }
+
+  function toggleShuffleQueue() {
+    const nextShuffleEnabled = !shuffleEnabled;
+    setShuffleEnabled(nextShuffleEnabled);
+    const queue = resolveQueueForTrack(activeTrack.id);
+    const playableIds = materializeQueueIds(queue.length ? queue : playQueueTracks, activeTrack.id, nextShuffleEnabled);
+    if (playableIds.length) setPlayQueueIds(playableIds);
+  }
+
+  function toggleLikeTrack(trackId: string) {
+    const track = allTracks.find((item) => item.id === trackId);
+    if (track?.source === "netease") {
+      toggleNeteaseLike(track);
+      return;
+    }
+    setLikedTrackIds((current) => {
+      if (current[trackId]) {
+        const next = { ...current };
+        delete next[trackId];
+        return next;
+      }
+      return { ...current, [trackId]: true };
+    });
+  }
+
+  // Every track-list setter exists by now; wire the shared update helper.
+  updateTrackRef.current = (trackId, updateTrack, updateOptions) => {
+    const includeHistory = updateOptions?.includeHistory ?? true;
+    // Metadata warmups touch one track at a time; skip the full array copy
+    // (and the re-render it triggers) for lists that do not contain it.
+    const applyTo = (tracks: Track[]) =>
+      tracks.some((track) => track.id === trackId) ? tracks.map(updateTrack) : tracks;
+    setLocalTracks(applyTo);
+    setNeteaseTracks(applyTo);
+    setDailyTracks(applyTo);
+    setRoamTracks(applyTo);
+    setNeteaseLikedTracks(applyTo);
+    setPlaylistTracks(applyTo);
+    if (includeHistory) {
+      setPlayHistory((current) =>
+        current.some((entry) => entry.track.id === trackId)
+          ? current.map((entry) => ({
+              ...entry,
+              track: updateTrack(entry.track),
+            }))
+          : current,
+      );
+    }
+  };
+
+  const handlePlaybackCommand = useEffectEvent((command: "toggle" | "previous" | "next") => {
+    if (command === "toggle") {
+      togglePlayback();
+      return;
+    }
+    if (command === "previous") {
+      pickRelativeTrack(-1);
+      return;
+    }
+    pickRelativeTrack(1);
+  });
+
   useEffect(() => {
     rendererDiagnosticRef.current = {
       activeTrackId: activeTrack.id,
@@ -437,6 +686,7 @@ export default function App() {
       shuffleEnabled,
     };
   }, [activeTrack.id, activeTrack.title, activeView, audioOutputMode, nativePlaybackEnabled, playQueueTracks.length, playing, shuffleEnabled]);
+
   useEffect(() => {
     const log = window.ariaDesktop?.log;
     if (!log) return;
@@ -479,71 +729,299 @@ export default function App() {
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
     };
   }, []);
-  const linkedLyricCount = useMemo(
-    () => allTracks.filter((track) => track.lyricStatus === "linked").length,
-    [allTracks],
-  );
-  const lyricProgress = useMemo(
-    () => (allTracks.length ? Math.round((linkedLyricCount / allTracks.length) * 100) : 0),
-    [allTracks.length, linkedLyricCount],
-  );
-
-  function commitCurrentTime(nextTime: number, force = false) {
-    const safeTime = Math.max(0, Number(nextTime) || 0);
-    const now = performance.now();
-    const previous = lastCurrentTimeRenderRef.current;
-    if (!force && Math.abs(safeTime - previous.time) < 0.3 && now - previous.at < 320) {
-      return;
-    }
-    lastCurrentTimeRenderRef.current = { at: now, time: safeTime };
-    setCurrentTime(safeTime);
-  }
-
-  const handlePlaybackCommand = useEffectEvent((command: "toggle" | "previous" | "next") => {
-    if (command === "toggle") {
-      togglePlayback();
-      return;
-    }
-    if (command === "previous") {
-      pickRelativeTrack(-1);
-      return;
-    }
-    pickRelativeTrack(1);
-  });
 
   useEffect(() => {
     return window.ariaDesktop?.onPlaybackCommand?.(handlePlaybackCommand);
   }, [handlePlaybackCommand]);
 
   useEffect(() => {
+    writeKeyboardShortcuts(keyboardShortcuts);
+    window.ariaDesktop?.configureGlobalShortcuts?.(keyboardShortcuts).catch(() => undefined);
+  }, [keyboardShortcuts]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("aria-lyric-display-mode", lyricDisplayMode);
+    } catch {
+      // Lyric presentation settings are best-effort.
+    }
+  }, [lyricDisplayMode]);
+
+  useEffect(() => {
     const updateTaskbarPlayback = window.ariaDesktop?.updateTaskbarPlayback;
     if (!updateTaskbarPlayback) return;
 
+    const hasTrack = activeTrack.id !== idleTrack.id;
+    // Keep the native window/application identity stable for OOPZ and other
+    // application-loopback tools. Song metadata is published separately.
+    document.title = "Aria";
     updateTaskbarPlayback({
-      title: activeTrack.id === idleTrack.id ? "" : activeTrack.title,
-      artist: activeTrack.id === idleTrack.id ? "" : activeTrack.artist,
+      title: hasTrack ? activeTrack.title : "",
+      artist: hasTrack ? activeTrack.artist : "",
       playing,
     }).catch(() => undefined);
   }, [activeTrack.artist, activeTrack.id, activeTrack.title, playing]);
 
+  const seekToFromMediaKey = useEffectEvent((time: number) => seekTo(time));
+
+  // Publish playback to the OS media overlay / lock screen (Windows SMTC).
   useEffect(() => {
-    if (!("mediaSession" in navigator)) return;
-    const session = navigator.mediaSession;
-    if (activeTrack.id === idleTrack.id) {
-      session.metadata = null;
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession) return;
+
+    if (!hasActiveTrack) {
+      mediaSession.metadata = null;
+      mediaSession.playbackState = "none";
       return;
     }
-    session.metadata = new MediaMetadata({
+    mediaSession.metadata = new MediaMetadata({
       title: activeTrack.title,
       artist: activeTrack.artist,
       album: activeTrack.album,
       artwork: activeTrack.coverUrl ? [{ src: activeTrack.coverUrl, sizes: "512x512" }] : [],
     });
-    session.setActionHandler("play", () => setPlaying(true));
-    session.setActionHandler("pause", () => setPlaying(false));
-    session.setActionHandler("previoustrack", () => pickRelativeTrack(-1));
-    session.setActionHandler("nexttrack", () => pickRelativeTrack(1));
-  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title]);
+    mediaSession.playbackState = playing ? "playing" : "paused";
+  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, hasActiveTrack, playing]);
+
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession) return;
+
+    const handlers: Array<[MediaSessionAction, ((details: MediaSessionActionDetails) => void) | null]> = [
+      ["play", () => handlePlaybackCommand("toggle")],
+      ["pause", () => handlePlaybackCommand("toggle")],
+      ["previoustrack", () => handlePlaybackCommand("previous")],
+      ["nexttrack", () => handlePlaybackCommand("next")],
+      [
+        "seekto",
+        (details) => {
+          if (typeof details.seekTime === "number") seekToFromMediaKey(details.seekTime);
+        },
+      ],
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        mediaSession.setActionHandler(action, handler);
+      } catch {
+        // Individual session actions are optional per platform.
+      }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          mediaSession.setActionHandler(action, null);
+        } catch {
+          // Optional per platform.
+        }
+      }
+    };
+  }, [handlePlaybackCommand, seekToFromMediaKey]);
+
+  // The non-native fallback thumbnail clips to the visible artwork. Prefer
+  // the exact current view so an exiting animation cannot leave a stale clip
+  // from the previous page.
+  useEffect(() => {
+    const update = () => {
+      const selectors = immersiveOpen
+        ? ['[data-taskbar-anchor="immersive"]']
+        : activeView === "player"
+          ? ['[data-taskbar-anchor="player-cover"]']
+          : activeView === "home"
+            ? ['[data-taskbar-anchor="home-cover"]']
+            : [];
+      let rect: DOMRect | null = null;
+      for (const selector of selectors) {
+        const candidate = document.querySelector<HTMLElement>(selector);
+        if (!candidate) continue;
+        const nextRect = candidate.getBoundingClientRect();
+        if (nextRect.width >= 8 && nextRect.height >= 8 && nextRect.right > 0 && nextRect.bottom > 0) {
+          rect = nextRect;
+          break;
+        }
+      }
+      if (!rect) {
+        if (taskbarClipKeyRef.current !== "none") {
+          taskbarClipKeyRef.current = "none";
+          void window.ariaDesktop?.setTaskbarPreviewRect?.(null);
+        }
+        return;
+      }
+      const key = `${window.devicePixelRatio}|${Math.round(rect.left)}|${Math.round(rect.top)}|${Math.round(rect.width)}|${Math.round(rect.height)}`;
+      if (taskbarClipKeyRef.current === key) return;
+      taskbarClipKeyRef.current = key;
+      void window.ariaDesktop?.setTaskbarPreviewRect?.({
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      });
+    };
+    update();
+    const interval = window.setInterval(update, 500);
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("scroll", update);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("scroll", update);
+    };
+  }, [activeView, activeTrack.id, immersiveOpen]);
+
+  // Feed two bounded bitmaps to the native DWM bridge. Windows asks for a
+  // square-ish thumbnail and a separate live preview; sharing one stretched
+  // source is what made the old implementation look unlike NetEase Cloud.
+  useEffect(() => {
+    const setThumb = window.ariaDesktop?.setTaskbarIconicThumb;
+    const clearThumb = window.ariaDesktop?.clearTaskbarIconicThumb;
+    if (!setThumb) return;
+    const taskbarProgressRatio = playing ? 0.42 : 0.18;
+
+    let cancelled = false;
+    let sending = false;
+    let sendQueued = false;
+    const thumbnail = document.createElement("canvas");
+    thumbnail.width = 220;
+    thumbnail.height = 220;
+    const thumbnailContext = thumbnail.getContext("2d", { willReadFrequently: true });
+    if (!thumbnailContext) return;
+    // Retain names used by the legacy dead branch below without allocating a
+    // second canvas; the current build sends only the compact cover bitmap.
+    const livePreview = { width: 1, height: 1 };
+    const liveContext: any = null;
+
+    if (!hasActiveTrack) {
+      void clearThumb?.().catch(() => undefined);
+      return;
+    }
+
+    const drawCover = (context: CanvasRenderingContext2D, width: number, height: number, image: HTMLImageElement | null) => {
+      const fallback = context.createLinearGradient(0, 0, width, height);
+      fallback.addColorStop(0, activeTrack.accent || "#343844");
+      fallback.addColorStop(1, "#171717");
+      context.fillStyle = fallback;
+      context.fillRect(0, 0, width, height);
+      if (!image || !image.naturalWidth || !image.naturalHeight) return;
+      const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      context.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    };
+
+    let image: any = null;
+    const drawFrame = () => {
+      drawCover(thumbnailContext, thumbnail.width, thumbnail.height, image);
+      return;
+      const width = livePreview.width;
+      const height = livePreview.height;
+      const background = liveContext.createLinearGradient(0, 0, width, height);
+      background.addColorStop(0, "#f5f6f8");
+      background.addColorStop(1, activeTrack.accent || "#dfe4ec");
+      liveContext.fillStyle = background;
+      liveContext.fillRect(0, 0, width, height);
+      liveContext.fillStyle = "rgba(255,255,255,0.78)";
+      liveContext.fillRect(36, 32, width - 72, height - 64);
+      liveContext.fillStyle = "#17191e";
+      liveContext.font = "600 34px Segoe UI, sans-serif";
+      liveContext.fillText("Aria", 74, 92);
+      liveContext.fillStyle = "#3e4653";
+      liveContext.font = "600 30px Segoe UI, sans-serif";
+      const title = activeTrack.title.length > 24 ? `${activeTrack.title.slice(0, 23)}...` : activeTrack.title;
+      liveContext.fillText(title, 74, 176);
+      liveContext.fillStyle = "#727b89";
+      liveContext.font = "24px Segoe UI, sans-serif";
+      const artist = activeTrack.artist.length > 30 ? `${activeTrack.artist.slice(0, 29)}...` : activeTrack.artist;
+      liveContext.fillText(artist, 74, 216);
+      liveContext.fillStyle = "#c5ccd5";
+      liveContext.fillRect(74, 458, 520, 8);
+      liveContext.fillStyle = "#8fa7ff";
+      liveContext.fillRect(74, 458, taskbarProgressRatio * 520, 8);
+      liveContext.fillStyle = "#6d7684";
+      liveContext.font = "18px Segoe UI, sans-serif";
+      liveContext.fillText("NOW PLAYING", 74, 412);
+      liveContext.fillStyle = "#17191e";
+      liveContext.beginPath();
+      liveContext.arc(190, 518, 24, 0, Math.PI * 2);
+      liveContext.arc(270, 518, 30, 0, Math.PI * 2);
+      liveContext.arc(350, 518, 24, 0, Math.PI * 2);
+      liveContext.fill();
+      liveContext.fillStyle = "#ffffff";
+      liveContext.font = "28px Segoe UI Symbol, sans-serif";
+      liveContext.fillText("‹", 181, 527);
+      liveContext.fillText(playing ? "Ⅱ" : "▶", 259, 528);
+      liveContext.fillText("›", 341, 527);
+      if (image && image.naturalWidth && image.naturalHeight) {
+        const coverSize = 390;
+        const scale = Math.max(coverSize / image.naturalWidth, coverSize / image.naturalHeight);
+        const drawWidth = image.naturalWidth * scale;
+        const drawHeight = image.naturalHeight * scale;
+        liveContext.save();
+        liveContext.beginPath();
+        liveContext.roundRect(520, 92, coverSize, coverSize, 24);
+        liveContext.clip();
+        liveContext.drawImage(image, 520 + (coverSize - drawWidth) / 2, 92 + (coverSize - drawHeight) / 2, drawWidth, drawHeight);
+        liveContext.restore();
+      }
+    };
+
+    const send = () => {
+      if (cancelled) return;
+      if (sending) {
+        sendQueued = true;
+        return;
+      }
+      try {
+        const thumbnailPixels = thumbnailContext.getImageData(0, 0, thumbnail.width, thumbnail.height).data;
+        const requests = [setThumb(thumbnailPixels, thumbnail.width, thumbnail.height)];
+        // The large Aero Peek preview is intentionally left to DWM's live
+        // capture of the real Aria window. Sending a second hand-drawn frame
+        // here made the preview diverge from the application UI.
+        sending = true;
+        void Promise.all(requests)
+          .catch(() => undefined)
+          .finally(() => {
+            sending = false;
+            if (sendQueued) {
+              sendQueued = false;
+              send();
+            }
+          });
+      } catch {
+        // Canvas readback can fail on tainted images; the native preview keeps
+        // the last valid frame in that case.
+      }
+    };
+
+    drawFrame();
+    send();
+
+    const imageElement = new Image();
+    imageElement.crossOrigin = "anonymous";
+    imageElement.decoding = "async";
+    imageElement.onload = () => {
+      if (cancelled) return;
+      image = imageElement;
+      drawFrame();
+      send();
+    };
+    imageElement.onerror = () => undefined;
+    if (activeTrack.coverUrl) {
+      const previewCoverUrl = activeTrack.coverUrl.includes("/api/providers/netease/cover")
+        ? `${activeTrack.coverUrl}${activeTrack.coverUrl.includes("?") ? "&" : "?"}size=320y320`
+        : activeTrack.coverUrl;
+      void getBoundedCoverUrl(previewCoverUrl).then((resolvedUrl) => {
+        if (!cancelled && resolvedUrl) imageElement.src = resolvedUrl;
+      });
+    }
+
+    return () => {
+      cancelled = true;
+      imageElement.onload = null;
+      imageElement.onerror = null;
+      imageElement.removeAttribute("src");
+    };
+  }, [activeTrack.accent, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, hasActiveTrack, playing]);
 
   async function openImmersiveView() {
     setImmersiveOpen(true);
@@ -587,22 +1065,22 @@ export default function App() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
-      if (event.key === " " || event.code === "Space" || event.key === "MediaPlayPause") {
+      if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && (event.key === " " || event.code === "Space" || event.key === "MediaPlayPause")) {
         event.preventDefault();
         handlePlaybackCommand("toggle");
         return;
       }
-      if (event.key === "MediaTrackNext" || (event.altKey && event.key === "ArrowRight") || (globalArrowKeysEnabled && event.key === "ArrowRight")) {
+      if (event.key === "MediaTrackNext" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight")) {
         event.preventDefault();
         handlePlaybackCommand("next");
         return;
       }
-      if (event.key === "MediaTrackPrevious" || (event.altKey && event.key === "ArrowLeft") || (globalArrowKeysEnabled && event.key === "ArrowLeft")) {
+      if (event.key === "MediaTrackPrevious" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft")) {
         event.preventDefault();
         handlePlaybackCommand("previous");
         return;
       }
-      if (event.key.toLowerCase() === "i") {
+      if (!event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "i") {
         event.preventDefault();
         if (immersiveOpen) {
           void closeImmersiveView();
@@ -613,150 +1091,39 @@ export default function App() {
       }
       if (event.key === "Escape") {
         void closeImmersiveView();
+        return;
+      }
+      if (!window.ariaDesktop?.configureGlobalShortcuts) {
+        if (matchesShortcut(event, keyboardShortcuts.toggle)) {
+          event.preventDefault();
+          handlePlaybackCommand("toggle");
+          return;
+        }
+        if (matchesShortcut(event, keyboardShortcuts.previous)) {
+          event.preventDefault();
+          handlePlaybackCommand("previous");
+          return;
+        }
+        if (matchesShortcut(event, keyboardShortcuts.next)) {
+          event.preventDefault();
+          handlePlaybackCommand("next");
+        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [globalArrowKeysEnabled, handlePlaybackCommand, immersiveOpen]);
-
-  async function refreshNeteaseData() {
-    const [liked, daily, roam, playlists] = await Promise.all([
-      api.getProviderLiked(),
-      api.getProviderDaily(),
-      api.getProviderRoam(),
-      api.getProviderPlaylists(),
-    ]);
-    const dailyUiTracks = daily.tracks.map(providerTrackToUiTrack);
-    const roamUiTracks = roam.tracks.map((track, index) => providerTrackToUiTrack(track, index + dailyUiTracks.length));
-    const likedUiTracks = liked.tracks.map((track, index) =>
-      providerTrackToUiTrack(track, index + dailyUiTracks.length + roamUiTracks.length),
-    );
-    const merged = mergeTracks([...dailyUiTracks, ...roamUiTracks, ...likedUiTracks]);
-
-    setDailyTracks(dailyUiTracks);
-    setRoamTracks(roamUiTracks);
-    setNeteaseLikedTracks(likedUiTracks);
-    setNeteaseLikedIds(Object.fromEntries(likedUiTracks.map((track) => [track.id, true])));
-    setNeteaseTracks(merged);
-    setProviderPlaylists(playlists.playlists);
-    warmNeteaseTrackCache(merged);
-    if (activeTrackId === idleTrack.id && !localTracks.length && merged[0]) {
-      setActiveTrackId(merged[0].id);
-    }
-  }
-
-  async function refreshRoamData() {
-    if (roamRefreshing) return;
-    setRoamRefreshing(true);
-    try {
-      const currentSignature = trackIdSignature(roamTracks);
-      let excludeIds = providerIdsForTracks(roamTracks);
-      let nextRoamTracks: Track[] = [];
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const roam = await api.getProviderRoam("netease", 30, { refresh: true, excludeIds });
-        const candidateTracks = mergeTracks(
-          roam.tracks.map((track, index) => providerTrackToUiTrack(track, index + dailyTracks.length + attempt * 30)),
-        );
-        if (!candidateTracks.length) continue;
-
-        nextRoamTracks = candidateTracks;
-        if (trackIdSignature(candidateTracks) !== currentSignature) break;
-        excludeIds = [...new Set([...excludeIds, ...providerIdsForTracks(candidateTracks)])];
-      }
-
-      if (!nextRoamTracks.length) return;
-      setRoamTracks(nextRoamTracks);
-      setNeteaseTracks((current) => mergeTracks([...current, ...nextRoamTracks]));
-      warmNeteaseTrackCache(nextRoamTracks);
-
-      if (activeView === "radar") {
-        const queueTracks =
-          activeTrack.id !== idleTrack.id && !nextRoamTracks.some((track) => track.id === activeTrack.id)
-            ? [activeTrack, ...nextRoamTracks]
-            : nextRoamTracks;
-        const playableIds = materializeQueueIds(queueTracks, activeTrack.id, shuffleEnabled);
-        if (playableIds.length) setPlayQueueIds(playableIds);
-      }
-    } finally {
-      setRoamRefreshing(false);
-    }
-  }
-
-  function providerIdsForTracks(tracksToRead: Track[]) {
-    return tracksToRead
-      .map((track) => track.providerId ?? (track.id.startsWith("netease:") ? track.id.slice("netease:".length) : null))
-      .filter((id): id is string => Boolean(id));
-  }
-
-  function trackIdSignature(tracksToRead: Track[]) {
-    return tracksToRead.map((track) => track.id).join("|");
-  }
-
-  function warmNeteaseTrackCache(tracksToWarm: Track[]) {
-    const warmupLevel = hifiEnabled ? "jymaster" : qualityLevel;
-    const warmupItems = tracksToWarm
-      .filter((track) => track.source === "netease" && track.providerId)
-      .map((track) => ({ id: track.providerId as string, key: `${warmupLevel}:${track.providerId}` }))
-      .filter((item) => !neteaseWarmupRef.current.has(item.key))
-      .slice(0, warmupBatchLimits.neteaseTracks);
-    const ids = warmupItems.map((item) => item.id);
-    if (!ids.length) return;
-    warmupItems.forEach((item) => neteaseWarmupRef.current.add(item.key));
-    trimStringSet(neteaseWarmupRef, memoryLimits.neteaseWarmup);
-    api.warmNeteaseCache(ids, warmupLevel).catch(() => {
-      warmupItems.forEach((item) => neteaseWarmupRef.current.delete(item.key));
-    });
-
-    const metadataItems = warmupItems.slice(
-      0,
-      playing ? warmupBatchLimits.neteaseMetadataPlaying : warmupBatchLimits.neteaseMetadataIdle,
-    );
-    void Promise.allSettled(
-      metadataItems.map((item) =>
-        api
-          .getNeteaseStreamMeta(item.id, warmupLevel)
-          .then((meta) => applyStreamMetaToTrack(`netease:${item.id}`, meta)),
-      ),
-    );
-  }
-
-  function warmLocalCoverCache(tracksToWarm: Track[]) {
-    preloadTrackCovers(tracksToWarm);
-    const ids = tracksToWarm
-      .filter((track) => track.source === "local" && track.coverUrl && !track.coverUrl.startsWith("data:"))
-      .map((track) => track.id)
-      .filter((id) => {
-        if (localCoverWarmupRef.current.has(id)) return false;
-        localCoverWarmupRef.current.add(id);
-        return true;
-      })
-      .slice(0, warmupBatchLimits.localCovers);
-    if (!ids.length) return;
-    trimStringSet(localCoverWarmupRef, memoryLimits.localCoverWarmup);
-    api.warmLocalCovers(ids).catch(() => {
-      ids.forEach((id) => localCoverWarmupRef.current.delete(id));
-    });
-  }
-
-  function preloadTrackCovers(tracksToWarm: Track[], limit = warmupBatchLimits.preloadedImages) {
-    tracksToWarm
-      .map((track) => track.coverUrl)
-      .filter((url): url is string => Boolean(url))
-      .slice(0, limit)
-      .forEach((url) => {
-        const image = new Image();
-        image.decoding = "async";
-        image.src = url;
-      });
-  }
+  }, [handlePlaybackCommand, immersiveOpen, keyboardShortcuts]);
 
   useEffect(() => {
-    const sourceTracks = playQueueTracks.length ? playQueueTracks : visibleTracks;
-    const tracksToWarm = sourceTracks.slice(0, playing ? 12 : 36);
+    const sourceTracks = activeView === "radar" ? roamTracks : playQueueTracks.length ? playQueueTracks : visibleTracks;
+    const tracksToWarm = sourceTracks.slice(0, activeView === "radar" ? 72 : playing ? 12 : 36);
     const timer = window.setTimeout(() => warmNeteaseTrackCache(tracksToWarm), playing ? 1600 : 260);
     return () => window.clearTimeout(timer);
-  }, [hifiEnabled, playing, qualityLevel, playQueueTracks, visibleTracks]);
+    // warmNeteaseTrackCache closes over fresh state on every render, matching
+    // the pre-hook behavior; only its inputs belong in the dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView, hifiEnabled, playing, playQueueTracks, roamTracks, qualityLevel, visibleTracks]);
 
   useEffect(() => {
     trimStringSet(neteaseWarmupRef, memoryLimits.neteaseWarmup);
@@ -771,7 +1138,7 @@ export default function App() {
       trimStringSet(artistRequestRef, memoryLimits.artistRequest);
       trimStringSet(artistAvatarLookupRef, memoryLimits.artistAvatarLookup);
       trimStringSet(localCoverWarmupRef, memoryLimits.localCoverWarmup);
-      setArtistAvatarCache((current) => trimRecordCache(current, memoryLimits.artistAvatarCache));
+      trimStringSet(artworkSyncingRef, memoryLimits.artworkSyncing);
     }, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, []);
@@ -780,76 +1147,8 @@ export default function App() {
     const tracksToWarm = [activeTrack, ...playQueueTracks.slice(0, 12), ...visibleTracks.slice(0, 24)];
     const timer = window.setTimeout(() => warmLocalCoverCache(tracksToWarm), playing ? 700 : 120);
     return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTrack, playQueueTracks, playing, visibleTracks]);
-
-  useEffect(() => {
-    localTracksRef.current = localTracks;
-  }, [localTracks]);
-
-  useEffect(() => {
-    const text = query.trim();
-    if (!text) {
-      setSearchBundle({ localTracks: [], neteaseTracks: [], artists: [] });
-      setSearchLoading(false);
-      return;
-    }
-
-    const currentLocalTracks = localTracksRef.current;
-    const localMatches = currentLocalTracks.filter((track) =>
-      [track.title, track.artist, track.album, track.quality].join(" ").toLowerCase().includes(text.toLowerCase()),
-    );
-    const localArtists = createLocalArtistSummaries(currentLocalTracks)
-      .filter((artist) => artist.name.toLowerCase().includes(text.toLowerCase()))
-      .slice(0, 10);
-    setSearchBundle((current) => ({
-      localTracks: localMatches.slice(0, 24),
-      neteaseTracks: current.neteaseTracks.filter((track) =>
-        [track.title, track.artist, track.album].join(" ").toLowerCase().includes(text.toLowerCase()),
-      ),
-      artists: mergeArtists([
-        ...localArtists,
-        ...current.artists.filter(
-          (artist) => artist.source !== "local" && artist.name.toLowerCase().includes(text.toLowerCase()),
-        ),
-      ]).slice(0, 18),
-    }));
-    setSearchLoading(true);
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      api
-        .searchLibraryAndStream(text, 24)
-        .then((result) => {
-          if (cancelled) return;
-          const neteaseUiTracks = result.neteaseTracks.map((track, index) => providerTrackToUiTrack(track, index));
-          const localUiTracks = result.localTracks.map(localTrackToUiTrack);
-          const remoteArtists = result.artists.map(providerArtistToUiArtist);
-          setNeteaseTracks((current) => trimTrackCache([...current, ...neteaseUiTracks]));
-          setSearchBundle({
-            localTracks: mergeTracks([...localMatches, ...localUiTracks]).slice(0, 28),
-            neteaseTracks: neteaseUiTracks,
-            artists: mergeArtists([...localArtists, ...remoteArtists]).slice(0, 18),
-          });
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setSearchBundle({
-              localTracks: localMatches.slice(0, 28),
-              neteaseTracks: [],
-              artists: localArtists,
-            });
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setSearchLoading(false);
-        });
-    }, 360);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [localSearchSignature, query]);
 
   useEffect(() => {
     api
@@ -864,126 +1163,6 @@ export default function App() {
         setLibraryMeta({ roots: 0, updatedAt: null });
       });
   }, []);
-
-  useEffect(() => {
-    if (!selectedArtist) {
-      setArtistTracks([]);
-      return;
-    }
-
-    const localArtistTracks = allTracks.filter((track) =>
-      splitArtistNames(track.artist).some((artistName) => artistName.toLowerCase() === selectedArtist.name.toLowerCase()),
-    );
-    setArtistTracks(localArtistTracks);
-
-    let cancelled = false;
-    const providerId = selectedArtist.providerId;
-    if (providerId) {
-      const requestKey = `tracks:${providerId}`;
-      if (!artistRequestRef.current.has(requestKey)) {
-        artistRequestRef.current.add(requestKey);
-        trimStringSet(artistRequestRef, memoryLimits.artistRequest);
-        api
-          .getNeteaseArtistTracks(providerId)
-          .then((result) => {
-            if (cancelled) return;
-            const remoteTracks = result.tracks.map((track, index) => providerTrackToUiTrack(track, index));
-            setNeteaseTracks((current) => trimTrackCache([...current, ...remoteTracks]));
-            setArtistTracks(mergeTracks([...localArtistTracks, ...remoteTracks]));
-          })
-          .catch(() => {
-            artistRequestRef.current.delete(requestKey);
-          });
-      }
-    } else if (!selectedArtist.avatarUrl && !artistAvatarCacheRef.current[selectedArtist.name.toLowerCase()]) {
-      const requestKey = `lookup:${selectedArtist.name.toLowerCase()}`;
-      if (!artistRequestRef.current.has(requestKey)) {
-        artistRequestRef.current.add(requestKey);
-        trimStringSet(artistRequestRef, memoryLimits.artistRequest);
-        api
-          .lookupArtist(selectedArtist.name)
-          .then((result) => {
-            if (cancelled || !result.artist) return;
-            const remoteArtist = providerArtistToUiArtist(result.artist);
-            setArtistAvatarCache((current) => ({
-              ...current,
-              [selectedArtist.name.toLowerCase()]: remoteArtist.avatarUrl ?? null,
-            }));
-            setSelectedArtist((current) =>
-              current?.name === selectedArtist.name
-                ? { ...current, ...remoteArtist, source: current.source === "local" ? "mixed" : current.source }
-                : current,
-            );
-          })
-          .catch(() => {
-            artistRequestRef.current.delete(requestKey);
-          });
-      }
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [allTracks, selectedArtist]);
-
-  useEffect(() => {
-    const candidates = artistSummaries
-      .filter((artist) => {
-        const key = artist.name.toLowerCase();
-        return !artist.avatarUrl && !(key in artistAvatarCacheRef.current) && !artistAvatarLookupRef.current.has(key);
-      })
-      .slice(0, 6);
-    if (!candidates.length) return;
-
-    let cancelled = false;
-    candidates.forEach((artist) => artistAvatarLookupRef.current.add(artist.name.toLowerCase()));
-    trimStringSet(artistAvatarLookupRef, memoryLimits.artistAvatarLookup);
-    Promise.allSettled(
-      candidates.map(async (artist) => {
-        const result = await api.lookupArtist(artist.name);
-        const remoteArtist = result.artist ? providerArtistToUiArtist(result.artist) : null;
-        return [artist.name.toLowerCase(), remoteArtist?.avatarUrl ?? null] as const;
-      }),
-    ).then((results) => {
-      if (cancelled) return;
-      const entries = results.map((result, index) =>
-        result.status === "fulfilled" ? result.value : ([candidates[index].name.toLowerCase(), null] as const),
-      );
-      setArtistAvatarCache((current) => {
-        const next = { ...current };
-        for (const [key, avatarUrl] of entries) {
-          next[key] = avatarUrl;
-        }
-        return trimRecordCache(next, memoryLimits.artistAvatarCache);
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [artistSummaries]);
-
-  useEffect(() => {
-    const boundTracks = localTracks
-      .filter((track) => lyricBindings[track.id] && track.lyricStatus !== "linked" && !lyricSyncingRef.current.has(track.id))
-      .slice(0, 8);
-    if (!boundTracks.length) return;
-
-    boundTracks.forEach((track) => {
-      lyricSyncingRef.current.add(track.id);
-      api
-        .bindLyric(track.id, lyricBindings[track.id])
-        .then((result) => {
-          applyLyricsToTrack(track.id, result.lyrics);
-        })
-        .catch(() => {
-          // Keep using cached placeholder if rebinding fails.
-        })
-        .finally(() => {
-          lyricSyncingRef.current.delete(track.id);
-        });
-    });
-  }, [localTracks, lyricBindings]);
 
   useEffect(() => {
     try {
@@ -1029,27 +1208,9 @@ export default function App() {
   }, [likedTrackIds]);
 
   useEffect(() => {
-    const trimmedCache = trimRecordCache(artistAvatarCache, memoryLimits.artistAvatarCache);
-    artistAvatarCacheRef.current = trimmedCache;
-    if (trimmedCache !== artistAvatarCache) {
-      setArtistAvatarCache(trimmedCache);
-    }
-  }, [artistAvatarCache]);
-
-  useEffect(() => {
     window.localStorage.setItem("aria-background-enabled", String(backgroundEnabled));
     window.ariaDesktop?.setBackgroundEnabled?.(backgroundEnabled);
   }, [backgroundEnabled]);
-
-  useEffect(() => {
-    window.localStorage.setItem("aria-global-arrow-keys", String(globalArrowKeysEnabled));
-    window.ariaDesktop?.setGlobalArrowKeys?.(globalArrowKeysEnabled);
-  }, [globalArrowKeysEnabled]);
-
-  useEffect(() => {
-    window.localStorage.setItem("aria-perf-mode", String(perfMode));
-    document.documentElement.classList.toggle("perf-lite", perfMode);
-  }, [perfMode]);
 
   useEffect(() => {
     const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
@@ -1064,30 +1225,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    return () => {
-      try {
-        audioSourceRef.current?.disconnect();
-      } catch {
-        // Ignore audio graph shutdown errors.
-      }
-      try {
-        analyserRef.current?.disconnect();
-      } catch {
-        // Ignore audio graph shutdown errors.
-      }
-      try {
-        nativeSilenceGainRef.current?.disconnect();
-      } catch {
-        // Ignore audio graph shutdown errors.
-      }
-      audioSourceRef.current = null;
-      analyserRef.current = null;
-      nativeSilenceGainRef.current = null;
-      analyserOutputModeRef.current = null;
-      audioContextRef.current?.close().catch(() => undefined);
-      audioContextRef.current = null;
-    };
-  }, []);
+    const timer = window.setInterval(() => {
+      const collect = (window as Window & { gc?: () => void }).gc;
+      if (collect && (!playing || document.hidden)) collect();
+    }, 120_000);
+    return () => window.clearInterval(timer);
+  }, [playing]);
 
   useEffect(() => {
     if (activeTrack.id === idleTrack.id || activeTrack.id !== activeTrackId) return;
@@ -1101,6 +1244,7 @@ export default function App() {
       activeTrackSnapshot: createPlayerCacheSnapshot(activeTrack),
       playerSideView,
       playQueueIds,
+      playQueueSnapshots: createCachedQueueSnapshots(playQueueTracks),
       volume,
       qualityLevel,
       shuffleEnabled,
@@ -1108,13 +1252,24 @@ export default function App() {
       playing: false,
       updatedAt: now,
     });
-  }, [activeTrack, activeTrack.id, activeTrackId, playQueueIds, playerSideView, qualityLevel, repeatMode, shuffleEnabled, volume]);
+  }, [
+    activeTrack,
+    activeTrack.id,
+    activeTrackId,
+    playQueueIds,
+    playQueueTracks,
+    playerSideView,
+    qualityLevel,
+    repeatMode,
+    shuffleEnabled,
+    volume,
+  ]);
 
   useEffect(() => {
     api
       .getSettings()
       .then((settings) => {
-        setNeteaseAccount(settings.neteaseAccount);
+        setNeteaseAccount((current) => (current?.connected ? current : settings.neteaseAccount));
         setLyricBindings(settings.lyricBindings);
         if (settings.neteaseAccount.connected) {
           refreshNeteaseData().catch(() => {
@@ -1131,222 +1286,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (nativeAudio?.supported) {
-      nativeAudio
-        .isSupported?.()
-        .then((supported) => {
-          setNativeAudioSupported(Boolean(supported));
-          if (!supported) return [];
-          return nativeAudio.listDevices?.() ?? [];
-        })
-        .then((devices) => {
-          if (Array.isArray(devices) && devices.length) {
-            setAudioOutputDevices(devices);
-          }
-        })
-        .catch(() => {
-          setNativeAudioSupported(false);
-        });
-      return;
-    }
-
-    if (!navigator.mediaDevices?.enumerateDevices) return;
-
-    let cancelled = false;
-    const refreshDevices = () => {
-      navigator.mediaDevices
-        .enumerateDevices()
-        .then((devices) => {
-          if (cancelled) return;
-          const outputs = devices
-            .filter((device) => device.kind === "audiooutput")
-            .map((device, index) => ({
-              id: device.deviceId || `output-${index}`,
-              label: device.label || `播放设备 ${index + 1}`,
-            }));
-          setAudioOutputDevices([{ id: "default", label: "系统默认" }, ...outputs.filter((device) => device.id !== "default")]);
-        })
-        .catch(() => {
-          if (!cancelled) setAudioOutputDevices([{ id: "default", label: "系统默认" }]);
-        });
-    };
-
-    refreshDevices();
-    navigator.mediaDevices.addEventListener?.("devicechange", refreshDevices);
-    return () => {
-      cancelled = true;
-      navigator.mediaDevices.removeEventListener?.("devicechange", refreshDevices);
-    };
-  }, []);
-
-  useEffect(() => {
-    writeCachedAudioSettings({
-      sinkId: selectedSinkId,
-      hifiEnabled,
-      exclusiveMode,
-      outputMode: audioOutputMode,
-    });
-  }, [audioOutputMode, exclusiveMode, hifiEnabled, selectedSinkId]);
-
-  useEffect(() => {
-    setNativePlaybackFailed(false);
-    nativeLoadedUrlRef.current = null;
-    if (!nativePlaybackRequested) {
-      nativeAnalyserDelayUntilRef.current = 0;
-      setNativeAnalyserWakeToken((value) => value + 1);
-      return;
-    }
-
-    nativeAnalyserDelayUntilRef.current = performance.now() + 220;
-    const timer = window.setTimeout(() => {
-      setNativeAnalyserWakeToken((value) => value + 1);
-    }, 260);
-    return () => window.clearTimeout(timer);
-  }, [activeTrack.id, activeStreamUrl, audioOutputMode, nativePlaybackRequested, selectedSinkId]);
-
-  useEffect(() => {
-    if (!audioOutputDevices.length) return;
-    if (audioOutputDevices.some((device) => device.id === selectedSinkId)) return;
-    setSelectedSinkId("default");
-  }, [audioOutputDevices, selectedSinkId]);
-
-  const syncNativeAudioState = useEffectEvent((state: NativeAudioState) => {
-    const now = performance.now();
-    const previousNativeRender = lastNativeRenderRef.current;
-    const shouldRenderNativeState =
-      state.kind !== "progress" ||
-      now - previousNativeRender.at > 500 ||
-      Math.abs((state.position ?? 0) - previousNativeRender.position) > 0.8;
-    if (shouldRenderNativeState) {
-      lastNativeRenderRef.current = { at: now, position: state.position ?? previousNativeRender.position };
-      setNativeAudioState(state);
-    }
-    const currentTrackMatches = Boolean(state.trackId && state.trackId === activeTrackId);
-    const shouldSyncPlayback =
-      currentTrackMatches &&
-      (state.active ||
-        state.kind === "loading" ||
-        state.kind === "loaded" ||
-        state.kind === "pause" ||
-        state.kind === "seek" ||
-        state.kind === "progress" ||
-        state.kind === "ended");
-
-    if (shouldSyncPlayback) {
-      if (typeof state.duration === "number" && state.duration > 0) {
-        setDurationSeconds(state.duration);
-      }
-      if (typeof state.position === "number") {
-        commitCurrentTime(state.position, state.kind === "loaded" || state.kind === "seek" || state.kind === "ended");
-      }
-      if (state.kind === "pause" && typeof state.paused === "boolean") {
-        setPlaying(!state.paused);
-      }
-    }
-    if (state.kind === "ended" && currentTrackMatches && nativePlaybackEnabled) {
-      handleTrackEnded();
-    }
-  });
-
-  useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativeAudio?.supported) return;
-
-    let cancelled = false;
-    nativeAudio
-      .getState?.()
-      .then((state) => {
-        if (!cancelled && state) syncNativeAudioState(state as NativeAudioState);
-      })
-      .catch(() => undefined);
-
-    const dispose = nativeAudio.onEvent?.((payload) => {
-      if (!cancelled) syncNativeAudioState(payload as NativeAudioState);
-    });
-
-    return () => {
-      cancelled = true;
-      dispose?.();
-    };
-  }, [syncNativeAudioState]);
-
-  useEffect(() => {
-    if (nativePlaybackEnabled) return;
-    const audio = audioRef.current as (HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> }) | null;
-    if (!audio?.setSinkId) return;
-    audio.setSinkId(selectedSinkId === "default" ? "" : selectedSinkId).catch(() => {
-      // Device switching is optional; keep current output if the platform rejects it.
-    });
-  }, [nativePlaybackEnabled, selectedSinkId]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const nativeAnalyserBridgeReady = Boolean(nativePlaybackEnabled && audioSourceRef.current && nativeSilenceGainRef.current);
-    const nativeAnalyserReady =
-      !nativePlaybackEnabled ||
-      Boolean(
-        nativeAudioState?.trackId === activeTrack.id &&
-          nativeAudioState.active &&
-          performance.now() >= nativeAnalyserDelayUntilRef.current,
-      );
-    audio.muted = nativePlaybackEnabled && !nativeAnalyserBridgeReady;
-    audio.volume = nativePlaybackEnabled ? (nativeAnalyserBridgeReady ? 1 : 0) : Math.max(0, Math.min(1, nativePlaybackVolume / 100));
-    audio.preload = nativePlaybackEnabled ? (nativeAnalyserReady ? "auto" : "none") : hifiEnabled ? "auto" : "metadata";
-
-    if (!audioElementStreamUrl || !nativeAnalyserReady) {
-      audio.pause();
-      if (nativePlaybackEnabled && audio.src) {
-        audio.removeAttribute("src");
-        audio.load();
-      }
-      return;
-    }
-
-    const nextSrc = new URL(audioElementStreamUrl, window.location.href).href;
-    if (audio.src !== nextSrc) {
-      audio.pause();
-      if (audio.src) {
-        audio.removeAttribute("src");
-        audio.load();
-      }
-      audio.src = nextSrc;
-      audio.load();
-      setDurationSeconds(0);
-    }
-
-    if (playing && (pageVisible || !nativePlaybackEnabled)) {
-      audio.play().catch(() => {
-        if (!nativePlaybackEnabled) setPlaying(false);
-      });
-    } else {
-      audio.pause();
-    }
-  }, [
-    audioElementStreamUrl,
-    activeTrack.id,
-    hifiEnabled,
-    nativeAudioState?.active,
-    nativeAudioState?.trackId,
-    nativeAnalyserWakeToken,
-    nativePlaybackEnabled,
-    nativePlaybackVolume,
-    pageVisible,
-    playing,
-  ]);
-
-  useEffect(() => {
-    if (!nativePlaybackEnabled) return;
-    const audio = audioRef.current;
-    if (!audio) return;
-    const desiredTime = nativeAudioState?.position ?? currentTime;
-    if (!Number.isFinite(desiredTime)) return;
-    if (Math.abs((audio.currentTime || 0) - desiredTime) < 0.45) return;
-    audio.currentTime = Math.max(0, desiredTime);
-  }, [currentTime, nativeAudioState?.position, nativePlaybackEnabled]);
-
-  useEffect(() => {
     if (activeTrack.source !== "netease" || !activeTrack.providerId) return;
 
     let cancelled = false;
@@ -1354,7 +1293,7 @@ export default function App() {
       .getNeteaseStreamMeta(activeTrack.providerId, effectiveQualityLevel)
       .then((meta) => {
         if (cancelled) return;
-        applyStreamMetaToTrack(activeTrack.id, meta);
+        applyStreamMetaToTrack(activeTrack.id, meta, { authoritative: true });
       })
       .catch(() => {
         // Keep the previous metadata when the provider temporarily rejects the request.
@@ -1366,99 +1305,6 @@ export default function App() {
   }, [activeTrack.id, activeTrack.providerId, activeTrack.source, effectiveQualityLevel]);
 
   useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativeAudio?.supported) return;
-    if (nativePlaybackEnabled) return;
-    nativeLoadedUrlRef.current = null;
-    nativeAudio.stop?.().catch(() => undefined);
-  }, [nativePlaybackEnabled]);
-
-  useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
-    pendingSeekRef.current = currentTime;
-    nativeLoadedUrlRef.current = null;
-  }, [exclusiveMode, nativePlaybackEnabled, selectedSinkId]);
-
-  useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
-
-    if (!activeStreamUrl || activeTrack.id === idleTrack.id) {
-      nativeLoadedUrlRef.current = null;
-      nativeAudio.stop?.().catch(() => undefined);
-      return;
-    }
-
-    const nextUrl = activeStreamUrl;
-    const nextLoadKey = [
-      nextUrl,
-      activeTrack.nativeDevice ?? "",
-      activeTrack.nativeStart ?? "",
-      activeTrack.nativeEnd ?? "",
-      activeTrack.cdReadQuality ?? "high",
-    ].join("\u0000");
-    if (nativeLoadedUrlRef.current === nextLoadKey) return;
-
-    let cancelled = false;
-    const loadSequence = nativeLoadSequenceRef.current + 1;
-    nativeLoadSequenceRef.current = loadSequence;
-    nativeLoadedUrlRef.current = nextLoadKey;
-    nativeAudio
-      .load?.({
-        trackId: activeTrack.id,
-        url: nextUrl,
-        position: pendingSeekRef.current || 0,
-        paused: !playing,
-        volume: nativePlaybackVolume,
-        exclusive: exclusiveMode,
-        deviceId: selectedSinkId,
-        nativeDevice: activeTrack.nativeDevice ?? null,
-        startChapter: activeTrack.nativeStart ?? null,
-        endChapter: activeTrack.nativeEnd ?? null,
-        cdReadQuality: activeTrack.cdReadQuality ?? "high",
-      })
-      .then((state) => {
-        if (cancelled || nativeLoadSequenceRef.current !== loadSequence) return;
-        if (state) syncNativeAudioState(state as NativeAudioState);
-      })
-      .catch(() => {
-        if (cancelled || nativeLoadSequenceRef.current !== loadSequence) return;
-        nativeLoadedUrlRef.current = null;
-        setNativePlaybackFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeStreamUrl,
-    activeTrack.id,
-    activeTrack.cdReadQuality,
-    activeTrack.nativeEnd,
-    activeTrack.nativeDevice,
-    activeTrack.nativeStart,
-    nativePlaybackEnabled,
-    nativeAudioState?.trackId,
-    playing,
-    selectedSinkId,
-    syncNativeAudioState,
-    exclusiveMode,
-    nativePlaybackVolume,
-  ]);
-
-  useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
-    nativeAudio.setPaused?.(!playing).catch(() => undefined);
-  }, [nativePlaybackEnabled, playing]);
-
-  useEffect(() => {
-    const nativeAudio = window.ariaDesktop?.nativeAudio;
-    if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
-    nativeAudio.setVolume?.(nativePlaybackVolume).catch(() => undefined);
-  }, [nativePlaybackEnabled, nativePlaybackVolume]);
-
-  useEffect(() => {
     if (!activeTrack.coverUrl) {
       setActivePalette({ primary: activeTrack.accent, secondary: activeTrack.accent });
       return;
@@ -1467,21 +1313,41 @@ export default function App() {
     let cancelled = false;
     const image = new Image();
     image.crossOrigin = "anonymous";
+    const releaseImage = () => {
+      image.onload = null;
+      image.onerror = null;
+      // The palette is copied into plain strings; keeping the decoded bitmap
+      // alive after extraction only grows Chromium's image memory over time.
+      image.removeAttribute("src");
+    };
     image.onload = () => {
-      if (cancelled) return;
+      if (cancelled) {
+        releaseImage();
+        return;
+      }
       try {
         setActivePalette(extractDominantColors(image));
       } catch {
         setActivePalette({ primary: activeTrack.accent, secondary: activeTrack.accent });
+      } finally {
+        releaseImage();
       }
     };
     image.onerror = () => {
       if (!cancelled) setActivePalette({ primary: activeTrack.accent, secondary: activeTrack.accent });
+      releaseImage();
     };
-    image.src = activeTrack.coverUrl;
+    // Palette extraction reads the bounded decode so oversized embedded
+    // artwork is sampled at ≤1024px instead of its native resolution.
+    void getBoundedCoverUrl(activeTrack.coverUrl).then((src) => {
+      if (cancelled) return;
+      if (src) image.src = src;
+      else releaseImage();
+    });
 
     return () => {
       cancelled = true;
+      releaseImage();
     };
   }, [activeTrack.id, activeTrack.coverUrl, activeTrack.accent]);
 
@@ -1503,84 +1369,9 @@ export default function App() {
         playedAt: Date.now(),
         count: (existing?.count ?? 0) + 1,
       };
-      return [nextEntry, ...current.filter((entry) => entry.track.id !== activeTrack.id)].slice(0, 200);
+      return [nextEntry, ...current.filter((entry) => entry.track.id !== activeTrack.id)].slice(0, 80);
     });
   }, [activeTrack.id, activeTrackId, playing]);
-
-  useEffect(() => {
-    if (!playing || !audioElementStreamUrl || !pageVisible) {
-      return;
-    }
-
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) return;
-
-    const context = audioContextRef.current ?? new AudioContextClass();
-    audioContextRef.current = context;
-    if (!audioSourceRef.current) {
-      try {
-        audioSourceRef.current = context.createMediaElementSource(audio);
-      } catch {
-        return;
-      }
-      analyserRef.current = context.createAnalyser();
-      configureSpectrumAnalyser(analyserRef.current);
-      audioSourceRef.current.connect(analyserRef.current);
-    }
-
-    void context.resume();
-    const analyser = analyserRef.current;
-    if (!analyser) return;
-    configureSpectrumAnalyser(analyser);
-
-    const desiredOutputMode = nativePlaybackEnabled ? "silent" : "audible";
-    if (analyserOutputModeRef.current !== desiredOutputMode) {
-      try {
-        analyser.disconnect();
-      } catch {
-        // Ignore graph cleanup errors; reconnect below.
-      }
-      try {
-        nativeSilenceGainRef.current?.disconnect();
-      } catch {
-        // The silent sink may already be disconnected.
-      }
-
-      if (nativePlaybackEnabled) {
-        const silentGain = nativeSilenceGainRef.current ?? context.createGain();
-        silentGain.gain.value = 0;
-        nativeSilenceGainRef.current = silentGain;
-        analyser.connect(silentGain);
-        silentGain.connect(context.destination);
-      } else {
-        analyser.connect(context.destination);
-      }
-      analyserOutputModeRef.current = desiredOutputMode;
-    }
-    if (nativePlaybackEnabled) {
-      audio.muted = false;
-      audio.volume = 1;
-    }
-  }, [audioElementStreamUrl, activeTrack.id, nativePlaybackEnabled, pageVisible, playing]);
-
-  useEffect(() => {
-    if (activeTrack.id === idleTrack.id || activeTrack.lyricStatus === "linked") return;
-    if (lyricSyncingRef.current.has(activeTrack.id)) return;
-
-    lyricSyncingRef.current.add(activeTrack.id);
-    syncLyricsForTrack(activeTrack)
-      .catch(() => {
-        // Keep the track searchable; the manual lyrics panel can retry.
-      })
-      .finally(() => {
-        lyricSyncingRef.current.delete(activeTrack.id);
-      });
-  }, [activeTrack.id, activeTrack.lyricStatus]);
 
   useEffect(() => {
     const candidates = localTracks.filter((track) => !track.coverUrl && !artworkSyncingRef.current.has(track.id)).slice(0, 24);
@@ -1599,406 +1390,24 @@ export default function App() {
     });
   }, [localTracks]);
 
-  async function scanBackendPath(folderPath: string) {
-    const result = await api.scanLibrary(folderPath);
-    const nextTracks = result.library?.tracks ?? result.tracks;
-    const nextUiTracks = nextTracks.map(localTrackToUiTrack);
-    pendingSeekRef.current = 0;
-    setLocalTracks(nextUiTracks);
-    warmLocalCoverCache(nextUiTracks);
-    setPlayQueueIds(materializeQueueIds(nextUiTracks, nextUiTracks[0]?.id ?? activeTrack.id, shuffleEnabled));
-    setLibraryMeta({
-      roots: result.library?.roots.length ?? 1,
-      updatedAt: result.library?.updatedAt ?? new Date().toISOString(),
-    });
-    if (nextTracks[0]) setActiveTrackId(nextTracks[0].id);
-    setActiveView("local");
-  }
-
-  async function scanCdLibrary(qualityMode: "high" | "low") {
-    const result = await api.scanCdDrives(true, qualityMode);
-    const scannedCdTracks = result.tracks.map(localTrackToUiTrack);
-    if (!result.library && !scannedCdTracks.length) {
-      setFolderName("未检测到音频光盘");
-      setActiveView("local");
-      return;
-    }
-    const nextUiTracks = result.library?.tracks
-      ? result.library.tracks.map(localTrackToUiTrack)
-      : mergeTracks([...localTracks, ...scannedCdTracks]);
-    const queue = scannedCdTracks.length ? scannedCdTracks : nextUiTracks;
-
-    pendingSeekRef.current = 0;
-    setLocalTracks(nextUiTracks);
-    warmLocalCoverCache(nextUiTracks);
-    if (queue.length) {
-      setPlayQueueIds(materializeQueueIds(queue, queue[0].id, shuffleEnabled));
-    }
-    setLibraryMeta({
-      roots: result.library?.roots.length ?? result.drives.length,
-      updatedAt: result.library?.updatedAt ?? new Date().toISOString(),
-    });
-    setFolderName(scannedCdTracks.length ? "光盘库" : folderName);
-    setActiveView("local");
-  }
-
-  async function openPlaylist(playlist: ProviderPlaylist) {
-    setSelectedPlaylist(playlist);
-    setPlaylistLoading(true);
-    try {
-      const result = await api.getNeteasePlaylistTracks(playlist.id);
-      const uiTracks = result.tracks.map((track, index) => providerTrackToUiTrack(track, index));
-      setPlaylistTracks(uiTracks);
-      setNeteaseTracks((current) => mergeTracks([...current, ...uiTracks]));
-      warmNeteaseTrackCache(uiTracks);
-    } finally {
-      setPlaylistLoading(false);
-    }
-  }
-
-  function pickRelativeTrack(direction: 1 | -1) {
-    const fallbackQueue = playQueueTracks.length ? playQueueTracks : playbackTracks.length ? playbackTracks : visibleTracks;
-    const shouldRefreshShuffleQueue =
-      shuffleEnabled && (!playQueueTracks.length || !playQueueTracks.some((track) => track.id === activeTrack.id));
-    const nextQueueIds = shouldRefreshShuffleQueue
-      ? materializeQueueIds(fallbackQueue, activeTrack.id, true)
-      : orderedQueueIds(playQueueTracks.length ? playQueueTracks : fallbackQueue);
-    const byId = new Map([...playQueueTracks, ...fallbackQueue].map((track) => [track.id, track]));
-    const queue = nextQueueIds.map((id) => byId.get(id)).filter((track): track is Track => Boolean(track));
-    if (!queue.length) return;
-    if (shouldRefreshShuffleQueue) setPlayQueueIds(nextQueueIds);
-    pendingSeekRef.current = 0;
-    const currentIndex = queue.findIndex((track) => track.id === activeTrack.id);
-    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
-    const nextIndex = (safeIndex + direction + queue.length) % queue.length;
-    const nextTrack = queue[nextIndex];
-    if (nextTrack.id === activeTrack.id) {
-      if (nativePlaybackEnabled) {
-        seekTo(0);
-      } else if (audioRef.current) {
-        audioRef.current.currentTime = 0;
-        audioRef.current.play().catch(() => setPlaying(false));
-      }
-    }
-    setActiveTrackId(nextTrack.id);
-    setCurrentTime(0);
-    setPlaying(true);
-  }
-
-  function restartActiveTrack() {
-    pendingSeekRef.current = 0;
-    setCurrentTime(0);
-    setPlaying(true);
-    if (nativePlaybackEnabled) {
-      window.ariaDesktop?.nativeAudio?.seek?.(0).catch(() => undefined);
-      window.ariaDesktop?.nativeAudio?.setPaused?.(false).catch(() => undefined);
-      return;
-    }
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = 0;
-    audio.play().catch(() => setPlaying(false));
-  }
-
-  function handleTrackEnded() {
-    if (repeatMode === "one") {
-      restartActiveTrack();
-      return;
-    }
-    pickRelativeTrack(1);
-  }
-
-  function handleAudioError() {
-    if (nativePlaybackEnabled) return;
-    if (!activeStreamUrl || !playing) return;
-
-    const now = Date.now();
-    const previous = audioErrorRef.current;
-    const nextCount = now - previous.lastAt > 6000 ? 1 : previous.count + 1;
-    audioErrorRef.current = { count: nextCount, lastAt: now };
-
-    if (nextCount >= 3 || (playQueueTracks.length || playbackTracks.length) <= 1) {
-      setPlaying(false);
-      return;
-    }
-
-    window.setTimeout(() => pickRelativeTrack(1), 650);
-  }
-
-  function seekTo(nextTime: number) {
-    if (nativePlaybackEnabled) {
-      pendingSeekRef.current = nextTime;
-      setCurrentTime(nextTime);
-      window.ariaDesktop?.nativeAudio?.seek?.(nextTime).catch(() => undefined);
-      if (!playing) setPlaying(true);
-      return;
-    }
-
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = nextTime;
-    setCurrentTime(nextTime);
-    if (!playing) setPlaying(true);
-  }
-
-  function togglePlayback() {
-    if (activeStreamUrl && activeTrack.id !== idleTrack.id) {
-      setPlaying((value) => !value);
-      return;
-    }
-
-    const fallbackTrack = playableTracks(playQueueTracks)[0] ?? playableTracks(contextualQueueTracks)[0] ?? playbackTracks[0];
-    if (fallbackTrack) chooseTrack(fallbackTrack.id);
-  }
-
-  function resolveQueueForTrack(trackId: string, preferredQueue?: Track[]) {
-    const preferredTracks = preferredQueue ? playableTracks(preferredQueue) : [];
-    if (preferredTracks.some((track) => track.id === trackId)) return preferredTracks;
-
-    const currentQueue = playableTracks(contextualQueueTracks);
-    if (activeView !== "home" && activeView !== "player" && currentQueue.some((track) => track.id === trackId)) {
-      return currentQueue;
-    }
-
-    const candidateQueues = [
-      playQueueTracks,
-      dailyTracks,
-      roamTracks,
-      playlistTracks,
-      neteaseLikedDisplayTracks,
-      visibleLocalTracks,
-      visibleTracks,
-    ].map(playableTracks);
-    return candidateQueues.find((tracks) => tracks.some((track) => track.id === trackId)) ?? currentQueue;
-  }
-
-  function chooseTrack(trackId: string, preferredQueue?: Track[]) {
-    const queue = resolveQueueForTrack(trackId, preferredQueue);
-    const targetTrack =
-      queue.find((track) => track.id === trackId) ??
-      allTracks.find((track) => track.id === trackId) ??
-      (cachedActiveTrackSnapshot?.id === trackId ? cachedActiveTrackSnapshot : null);
-    if (!targetTrack?.streamUrl) return;
-
-    const playableIds = materializeQueueIds(queue.length ? queue : [targetTrack], trackId, shuffleEnabled);
-    if (playableIds.length) setPlayQueueIds(playableIds);
-    pendingSeekRef.current = 0;
-    setActiveTrackId(trackId);
-    setCurrentTime(0);
-    setPlaying(true);
-  }
-
-  function toggleShuffleQueue() {
-    const nextShuffleEnabled = !shuffleEnabled;
-    setShuffleEnabled(nextShuffleEnabled);
-    const queue = resolveQueueForTrack(activeTrack.id);
-    const playableIds = materializeQueueIds(queue.length ? queue : playQueueTracks, activeTrack.id, nextShuffleEnabled);
-    if (playableIds.length) setPlayQueueIds(playableIds);
-  }
-
-  function toggleLikeTrack(trackId: string) {
-    const track = allTracks.find((item) => item.id === trackId);
-    if (track?.source === "netease") {
-      toggleNeteaseLike(track);
-      return;
-    }
-    setLikedTrackIds((current) => {
-      if (current[trackId]) {
-        const next = { ...current };
-        delete next[trackId];
-        return next;
-      }
-      return { ...current, [trackId]: true };
-    });
-  }
-
-  function toggleNeteaseLike(track: Track) {
-    const providerId = track.providerId;
-    if (!providerId) return;
-
-    const wasLiked = Boolean(neteaseLikedIds[track.id]);
-    const nextLiked = !wasLiked;
-    const likedTrack = { ...track, likedAt: nextLiked ? Date.now() : track.likedAt };
-    setNeteaseLikedIds((current) => {
-      const next = { ...current };
-      if (nextLiked) next[track.id] = true;
-      else delete next[track.id];
-      return next;
-    });
-    setNeteaseLikedTracks((current) =>
-      nextLiked
-        ? mergeTracks([likedTrack, ...current]).sort((left, right) => (right.likedAt ?? 0) - (left.likedAt ?? 0))
-        : current.filter((item) => item.id !== track.id),
-    );
-    setProviderPlaylists((current) =>
-      current.map((playlist, index) =>
-        isLikedPlaylist(playlist, index)
-          ? { ...playlist, trackCount: Math.max(0, playlist.trackCount + (nextLiked ? 1 : -1)) }
-          : playlist,
-      ),
-    );
-    if (isLikedPlaylist(selectedPlaylist)) {
-      setPlaylistTracks((current) =>
-        nextLiked
-          ? mergeTracks([likedTrack, ...current]).sort((left, right) => (right.likedAt ?? 0) - (left.likedAt ?? 0))
-          : current.filter((item) => item.id !== track.id),
-      );
-    }
-
-    api.setNeteaseLike(providerId, nextLiked).catch(() => {
-      setNeteaseLikedIds((current) => {
-        const next = { ...current };
-        if (wasLiked) next[track.id] = true;
-        else delete next[track.id];
-        return next;
-      });
-      setNeteaseLikedTracks((current) =>
-        wasLiked
-          ? mergeTracks([track, ...current]).sort((left, right) => (right.likedAt ?? 0) - (left.likedAt ?? 0))
-          : current.filter((item) => item.id !== track.id),
-      );
-      setProviderPlaylists((current) =>
-        current.map((playlist, index) =>
-          isLikedPlaylist(playlist, index)
-            ? { ...playlist, trackCount: Math.max(0, playlist.trackCount + (wasLiked ? 1 : -1)) }
-            : playlist,
-        ),
-      );
-      if (isLikedPlaylist(selectedPlaylist)) {
-        setPlaylistTracks((current) =>
-          wasLiked
-            ? mergeTracks([track, ...current]).sort((left, right) => (right.likedAt ?? 0) - (left.likedAt ?? 0))
-            : current.filter((item) => item.id !== track.id),
-        );
-      }
-    });
-  }
-
-  function applyLyricsToTrack(trackId: string, lyrics: Track["lyrics"]) {
-    if (!lyrics.length) return;
-    writeCachedLyrics(trackId, lyrics);
-    const updateTrack = (track: Track) =>
-      track.id === trackId ? { ...track, lyrics, lyricStatus: "linked" as const } : track;
-    setLocalTracks((current) => current.map(updateTrack));
-    setNeteaseTracks((current) => current.map(updateTrack));
-    setDailyTracks((current) => current.map(updateTrack));
-    setRoamTracks((current) => current.map(updateTrack));
-    setNeteaseLikedTracks((current) => current.map(updateTrack));
-    setPlaylistTracks((current) => current.map(updateTrack));
-  }
-
-  function applyArtworkToTrack(trackId: string, coverUrl?: string | null) {
-    if (!coverUrl) return;
-    const cachedOverride = readCachedArtworkOverride(trackId);
-    if (cachedOverride) return;
-    const proxiedCoverUrl = api.getNeteaseCoverUrl(coverUrl);
-    const updateTrack = (track: Track) => (track.id === trackId ? { ...track, coverUrl: proxiedCoverUrl } : track);
-    setLocalTracks((current) => current.map(updateTrack));
-    setNeteaseTracks((current) => current.map(updateTrack));
-    setDailyTracks((current) => current.map(updateTrack));
-    setRoamTracks((current) => current.map(updateTrack));
-    setNeteaseLikedTracks((current) => current.map(updateTrack));
-    setPlaylistTracks((current) => current.map(updateTrack));
-  }
-
-  async function replaceLocalArtwork(trackId: string, file: File) {
-    const dataUrl = await createArtworkOverrideDataUrl(file);
-    writeCachedArtworkOverride(trackId, dataUrl);
-    const updateTrack = (track: Track) =>
-      track.id === trackId && track.source === "local" ? { ...track, coverUrl: dataUrl } : track;
-    setLocalTracks((current) => current.map(updateTrack));
-    setPlayHistory((current) =>
-      current.map((entry) => ({
-        ...entry,
-        track: updateTrack(entry.track),
-      })),
-    );
-  }
-
-  function applyStreamMetaToTrack(
-    trackId: string,
-    meta: {
-      quality: Track["quality"];
-      bitrate: number | null;
-      sampleRate: number | null;
-      currentLevel: Track["currentLevel"];
-      availableLevels: NonNullable<Track["availableLevels"]>;
-    },
-  ) {
-    const updateTrack = (track: Track) =>
-      track.id === trackId
-        ? {
-            ...track,
-            quality: meta.quality,
-            bitrate: meta.bitrate,
-            sampleRate: meta.sampleRate,
-            currentLevel: meta.currentLevel ?? track.currentLevel ?? null,
-            availableLevels: meta.availableLevels.length ? meta.availableLevels : track.availableLevels,
-          }
-        : track;
-
-    setLocalTracks((current) => current.map(updateTrack));
-    setNeteaseTracks((current) => current.map(updateTrack));
-    setDailyTracks((current) => current.map(updateTrack));
-    setRoamTracks((current) => current.map(updateTrack));
-    setNeteaseLikedTracks((current) => current.map(updateTrack));
-    setPlaylistTracks((current) => current.map(updateTrack));
-  }
-
-  async function handleLogoutNetease() {
-    try {
-      await api.clearNeteaseCookie();
-    } catch {
-      // Local logout still proceeds even if the backend rejects.
-    }
-    setNeteaseAccount(null);
-    setNeteaseTracks([]);
-    setNeteaseLikedTracks([]);
-    setDailyTracks([]);
-    setRoamTracks([]);
-    setPlaylistTracks([]);
-    setProviderPlaylists([]);
-    setNeteaseLikedIds({});
-  }
-
-  async function syncLyricsForTrack(track: Track) {
-    if (track.source === "netease" && track.providerId) {
-      const result = await api.getNeteaseLyrics(track.providerId);
-      applyLyricsToTrack(track.id, result.lyrics);
-      return;
-    }
-
-    if (track.source === "local") {
-      const candidates = await api.searchLyrics({
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-      });
-      const best = candidates.candidates[0];
-      if (!best) return;
-      applyArtworkToTrack(track.id, best.coverUrl);
-      const result = await api.bindLyric(track.id, best.id);
-      applyLyricsToTrack(track.id, result.lyrics);
-    }
-  }
-
   return (
     <main className="relative h-screen overflow-hidden bg-[#f5f6f8] text-neutral-950">
       <audio
         ref={audioRef}
         crossOrigin="anonymous"
-        preload={hifiEnabled ? "auto" : "metadata"}
+        preload="metadata"
         onTimeUpdate={(event) => {
           if (nativePlaybackEnabled) return;
-          commitCurrentTime(event.currentTarget.currentTime || 0);
+          commitPlaybackTime(event.currentTarget.currentTime || 0);
         }}
         onLoadedMetadata={(event) => {
-          audioErrorRef.current = { count: 0, lastAt: 0 };
+          resetAudioError();
           const duration = event.currentTarget.duration || 0;
           if (!nativePlaybackEnabled) setDurationSeconds(duration);
           if (pendingSeekRef.current > 0) {
             const nextTime = Math.min(pendingSeekRef.current, Math.max(0, duration - 1));
             event.currentTarget.currentTime = nextTime;
-            if (!nativePlaybackEnabled) commitCurrentTime(nextTime, true);
+            if (!nativePlaybackEnabled) commitPlaybackTime(nextTime, true);
             pendingSeekRef.current = 0;
           }
         }}
@@ -2017,10 +1426,18 @@ export default function App() {
         // @ts-expect-error Chromium directory picker support.
         webkitdirectory=""
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = Array.from(event.target.files ?? []);
+          const file = files[0];
           const path = file?.webkitRelativePath || file?.name || "";
+          const absolutePath = (file as (File & { path?: string }) | undefined)?.path;
+          const audioFiles = files.filter((item) => /\.(flac|alac|wav|ape|m4a|aac|mp3|ogg|opus|wma|aiff?)$/i.test(item.name));
+          setOnboardingLocalInfo({
+            path: absolutePath || (path ? path.split(/[\\/]/)[0] : "已选择本地音乐"),
+            count: audioFiles.length || files.length,
+          });
           setFolderName(path.split("/")[0] || "已选择");
           setActiveView("local");
+          event.currentTarget.value = "";
         }}
       />
 
@@ -2059,11 +1476,7 @@ export default function App() {
                   )}
                   onClick={() => {
                     setQuery("");
-                    if (item.id === "settings") {
-                      setSettingsOpen(true);
-                    } else {
-                      setActiveView(item.id);
-                    }
+                    setActiveView(item.id);
                   }}
                 >
                   <Icon className="size-4" />
@@ -2088,6 +1501,18 @@ export default function App() {
               placeholder="搜索音乐、歌手、专辑"
               className="min-w-0 flex-1 bg-transparent text-sm text-neutral-800 outline-none placeholder:text-neutral-500"
             />
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="设置"
+              onClick={() => {
+                setSettingsReturnView(activeView === "settings" ? "home" : activeView);
+                setQuery("");
+                setActiveView("settings");
+              }}
+            >
+              <Settings2 />
+            </Button>
           </div>
 
           <div className="flex items-center gap-2" style={noDragRegionStyle}>
@@ -2118,6 +1543,7 @@ export default function App() {
             <AnimatePresence>
               {accountOpen && (
                 <AccountPanel
+                  initialAccount={neteaseAccount}
                   onClose={() => setAccountOpen(false)}
                   onAccountChange={(account) => {
                     setNeteaseAccount(account);
@@ -2157,20 +1583,23 @@ export default function App() {
         <section
           className={cn(
             "grid min-h-0 flex-1 gap-4 p-4 2xl:gap-5 2xl:p-5",
-            activeView === "player"
-              ? "xl:grid-cols-[minmax(0,1fr)_minmax(380px,18vw)]"
-              : "xl:grid-cols-[minmax(0,1fr)_minmax(340px,18vw)]",
+            activeView === "settings"
+              ? "grid-cols-1"
+              : activeView === "player"
+                ? "xl:grid-cols-[minmax(0,1fr)_minmax(380px,18vw)]"
+                : "xl:grid-cols-[minmax(0,1fr)_minmax(340px,18vw)]",
           )}
         >
-          <AnimatePresence mode="wait">
+          <AnimatePresence initial={false} mode="popLayout">
             <motion.div
               key={query.trim() ? "search" : activeView}
               variants={panelVariants}
               initial="initial"
               animate="animate"
               exit="exit"
-              transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
               className="min-h-0 min-w-0"
+              style={{ willChange: "transform, opacity" }}
             >
               {query.trim() ? (
                 <SearchSurface
@@ -2180,8 +1609,8 @@ export default function App() {
                   neteaseTracks={searchBundle.neteaseTracks}
                   artists={searchBundle.artists}
                   artistAvatarCache={artistAvatarCache}
-                  onPickTrack={(id) => {
-                    chooseTrack(id);
+                  onPickTrack={(id, queue) => {
+                    chooseTrack(id, queue);
                     setQuery("");
                   }}
                   onPickArtist={(artist) => {
@@ -2197,7 +1626,7 @@ export default function App() {
                   activeTrack={activeTrack}
                   tracks={visibleTracks}
                   playCounts={playCounts}
-                  playHistory={playHistory}
+                  playHistory={displayHistory}
                   playing={playing}
                   localTrackCount={localTracks.length}
                   neteaseLikedCount={neteaseLikedDisplayTracks.length}
@@ -2233,18 +1662,20 @@ export default function App() {
                   }}
                   hifiEnabled={hifiEnabled}
                   exclusiveMode={exclusiveMode}
-                  currentTime={currentTime}
                   durationSeconds={durationSeconds}
                   analyserRef={analyserRef}
                   visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
                   visualizerActive={pageVisible && !immersiveOpen}
+                  lyricDisplayMode={lyricDisplayMode}
+                  onLyricDisplayModeChange={setLyricDisplayMode}
                   onSeek={seekTo}
                 />
               )}
               {activeView === "local" && (
                 <LibrarySurfacePanel
                   folderName={folderName}
-                  onChooseFolder={() => fileInputRef.current?.click()}
+                  onChooseFolder={() => void chooseLocalFolder()}
+                  scanProgress={libraryScanProgress}
                   tracks={visibleLocalTracks}
                   libraryMeta={libraryMeta}
                   activeTrackId={activeTrackId}
@@ -2259,6 +1690,12 @@ export default function App() {
                 <LikedSurface
                   localTracks={localLikedTracks}
                   neteaseTracks={neteaseLikedDisplayTracks}
+                  onPickTrack={chooseTrack}
+                />
+              )}
+              {activeView === "history" && (
+                <HistorySurface
+                  history={displayHistory}
                   onPickTrack={chooseTrack}
                 />
               )}
@@ -2307,22 +1744,59 @@ export default function App() {
               )}
               {activeView === "cloud" && <CloudSurface />}
               {activeView === "stats" && <StatsSurface tracks={allTracks} playCounts={playCounts} />}
+              {activeView === "settings" && (
+                <SettingsPanel
+                  backgroundEnabled={backgroundEnabled}
+                  onBackgroundEnabledChange={setBackgroundEnabled}
+                  neteaseAccount={neteaseAccount}
+                  libraryMeta={libraryMeta}
+                  trackCount={allTracks.length}
+                  likedCount={localLikedTracks.length + neteaseLikedDisplayTracks.length}
+                  lyricProgress={lyricProgress}
+                  volume={volume}
+                  onVolumeChange={setVolume}
+                  audioOutputDevices={audioOutputDevices}
+                  selectedSinkId={selectedSinkId}
+                  onSelectedSinkIdChange={setSelectedSinkId}
+                  hifiEnabled={hifiEnabled}
+                  onHifiEnabledChange={setHifiEnabled}
+                  gaplessEnabled={gaplessEnabled}
+                  onGaplessEnabledChange={setGaplessEnabled}
+                  nativeAudioSupported={nativeAudioSupported}
+                  nativeAudioState={nativeAudioState}
+                  audioOutputMode={audioOutputMode}
+                  onAudioOutputModeChange={setAudioOutputMode}
+                  exclusiveMode={exclusiveMode}
+                  keyboardShortcuts={keyboardShortcuts}
+                  onKeyboardShortcutsChange={setKeyboardShortcuts}
+                  onClose={() => setActiveView(settingsReturnView)}
+                />
+              )}
                 </>
               )}
             </motion.div>
           </AnimatePresence>
 
-          {activeView === "player" ? (
+          {activeView === "settings" ? null : activeView === "player" ? (
             <PlayerSidePanel
               mode={playerSideView}
               onModeChange={setPlayerSideView}
               track={activeTrack}
               palette={activePalette}
-              currentTime={currentTime}
+              lyricDisplayMode={lyricDisplayMode}
               tracks={playQueueTracks.length ? playQueueTracks : visibleTracks}
               activeTrackId={activeTrackId}
               onPickTrack={chooseTrack}
               onSeek={seekTo}
+            />
+          ) : activeView === "home" ? (
+            <HomeSidePanel
+              tracks={visibleTracks}
+              playCounts={playCounts}
+              playHistory={displayHistory}
+              onOpenHistory={() => setActiveView("history")}
+              onOpenStats={() => setActiveView("stats")}
+              onPickTrack={chooseTrack}
             />
           ) : (
           <aside className="glass hidden min-h-0 flex-col rounded-[1.5rem] p-4 lg:flex">
@@ -2333,7 +1807,7 @@ export default function App() {
                 </p>
                 <h2 className="mt-1 text-xl font-semibold">下一首</h2>
               </div>
-              <Button variant="ghost" size="icon" aria-label="展开队列" onClick={() => setQueueExpanded(true)}>
+              <Button variant="ghost" size="icon" aria-label="展开队列">
                 <ListMusic />
               </Button>
             </div>
@@ -2344,55 +1818,12 @@ export default function App() {
         </section>
 
         <AnimatePresence>
-          {settingsOpen && (
-            <SettingsPanel
-              backgroundEnabled={backgroundEnabled}
-              onBackgroundEnabledChange={setBackgroundEnabled}
-              globalArrowKeysEnabled={globalArrowKeysEnabled}
-              onGlobalArrowKeysChange={setGlobalArrowKeysEnabled}
-              perfMode={perfMode}
-              onPerfModeChange={setPerfMode}
-              neteaseAccount={neteaseAccount}
-              onLogoutNetease={() => void handleLogoutNetease()}
-              runtimeInfo={{
-                view: activeView,
-                outputMode: audioOutputMode,
-                nativePlayback: nativePlaybackEnabled,
-                playing,
-                queueLength: playQueueTracks.length,
-                trackCount: allTracks.length,
-                perfMode,
-                audioContextState: audioContextRef.current?.state ?? "none",
-              }}
-              libraryMeta={libraryMeta}
-              trackCount={allTracks.length}
-              likedCount={localLikedTracks.length + neteaseLikedDisplayTracks.length}
-              lyricProgress={lyricProgress}
-              volume={volume}
-              onVolumeChange={setVolume}
-              audioOutputDevices={audioOutputDevices}
-              selectedSinkId={selectedSinkId}
-              onSelectedSinkIdChange={setSelectedSinkId}
-              hifiEnabled={hifiEnabled}
-              onHifiEnabledChange={setHifiEnabled}
-              nativeAudioSupported={nativeAudioSupported}
-              nativeAudioState={nativeAudioState}
-              audioOutputMode={audioOutputMode}
-              onAudioOutputModeChange={setAudioOutputMode}
-              exclusiveMode={exclusiveMode}
-              onClose={() => setSettingsOpen(false)}
-            />
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
           {immersiveOpen && (
             <ImmersivePlayerView
               activeTrack={activeTrack}
               palette={activePalette}
               playing={playing}
               visualizerPlaying={visualizerPlaying}
-              currentTime={currentTime}
               durationSeconds={durationSeconds}
               analyserRef={analyserRef}
               visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
@@ -2407,42 +1838,27 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {queueExpanded && (
-          <motion.div
-            className="fixed inset-0 z-[90] flex items-center justify-center bg-neutral-950/28 p-6 backdrop-blur-md"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.16 }}
-            onClick={() => setQueueExpanded(false)}
-          >
-            <motion.div
-              className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/80 bg-white/95 p-5 shadow-[0_28px_90px_rgba(20,24,35,0.3)] backdrop-blur-2xl sm:p-6"
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div className="flex items-center justify-between border-b border-neutral-950/8 pb-4">
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.24em] text-neutral-400">Queue</p>
-                  <h2 className="mt-1 text-xl font-semibold">播放队列</h2>
-                </div>
-                <Button variant="ghost" size="icon" aria-label="关闭" onClick={() => setQueueExpanded(false)}>
-                  <X />
-                </Button>
-              </div>
-              <QueueList
-                tracks={playQueueTracks.length ? playQueueTracks : visibleTracks}
-                activeTrackId={activeTrackId}
-                tone="card"
-                onPickTrack={(id) => {
-                  chooseTrack(id);
-                  setQueueExpanded(false);
-                }}
-              />
-            </motion.div>
-          </motion.div>
-        )}
+        <AnimatePresence>
+          {onboardingOpen && (
+            <OnboardingDialog
+              neteaseAccount={neteaseAccount}
+              hifiEnabled={hifiEnabled}
+              onHifiEnabledChange={setHifiEnabled}
+              backgroundEnabled={backgroundEnabled}
+              onBackgroundEnabledChange={setBackgroundEnabled}
+              gaplessEnabled={gaplessEnabled}
+              onGaplessEnabledChange={setGaplessEnabled}
+              onAddLocalMusic={() => void chooseLocalFolder()}
+              localMusicInfo={onboardingLocalInfo ?? (localTracks.length ? { path: folderName, count: localTracks.length } : null)}
+              scanProgress={libraryScanProgress}
+              onAccountChange={(account) => {
+                setNeteaseAccount(account);
+                if (account.connected) void refreshNeteaseData();
+              }}
+              onComplete={() => setOnboardingOpen(false)}
+            />
+          )}
+        </AnimatePresence>
 
         <FloatingNav
           activeView={activeView}
@@ -2465,11 +1881,7 @@ export default function App() {
           }}
           onPick={(id) => {
             setQuery("");
-            if (id === "settings") {
-              setSettingsOpen(true);
-            } else {
-              setActiveView(id);
-            }
+            setActiveView(id);
             setNavOpen(false);
           }}
         />
@@ -2477,6 +1889,3 @@ export default function App() {
     </main>
   );
 }
-
-
-

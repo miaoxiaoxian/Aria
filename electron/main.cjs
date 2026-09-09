@@ -1,14 +1,30 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, clipboard, globalShortcut, shell } = require("electron");
-const os = require("node:os");
-const { execFile, spawn } = require("node:child_process");
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, clipboard, globalShortcut, dialog } = require("electron");
+const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const zlib = require("node:zlib");
 const { createLogger, serializeError } = require("./logger.cjs");
 const { MpvAudioEngine } = require("./mpvEngine.cjs");
 
 const logger = createLogger(app);
 const { writeLog } = logger;
 logger.writeRuntimeSnapshot("desktop.log", "main loaded");
+
+// Optional native addon that answers the DWM iconic-thumbnail messages so
+// the taskbar hover preview shows the album art (NetEase-style).
+let iconicThumbAddon = null;
+try {
+  iconicThumbAddon = require("./native/aria-thumbnail/index.cjs");
+} catch (error) {
+  iconicThumbAddon = null;
+  logger.writeLog("desktop.log", `iconic thumbnail addon unavailable: ${error?.message || error}`);
+}
+
+// Windows needs an app-provided iconic bitmap for the compact taskbar card.
+// Keep an explicit opt-out for diagnostics, but enable the native DWM bridge
+// by default on Windows so the taskbar does not fall back to a full-window
+// capture. Electron still owns the thumbnail toolbar and clip region.
+const nativeIconicThumbnailEnabled = process.platform === "win32" && process.env.ARIA_NATIVE_ICONIC_THUMBNAIL !== "0";
 
 const apiPort = Number(process.env.ARIA_API_PORT || process.env.MUSICBOX_API_PORT || 3636);
 const apiBase = `http://127.0.0.1:${apiPort}`;
@@ -26,51 +42,102 @@ let taskbarPlayback = {
   artist: "",
   playing: false,
 };
-let globalArrowKeysEnabled = true;
-let globalArrowKeysRegistered = false;
-let gpuVendorId = null;
-let gpuDetectPromise = null;
-let gpuOptimizeEnabled = true;
-try {
-  const rawGpuMode = fs.readFileSync(path.join(app.getPath("userData"), "gpu-mode.json"), "utf8");
-  const parsedGpuMode = JSON.parse(rawGpuMode);
-  if (typeof parsedGpuMode?.optimize === "boolean") gpuOptimizeEnabled = parsedGpuMode.optimize;
-} catch {
-  gpuOptimizeEnabled = true;
-}
+const taskbarRetryTimers = new Set();
+let lastTaskbarClipLogKey = "";
+// Taskbar hover preview: clip the window thumbnail to the current cover art.
+// Electron BrowserWindow rectangles and renderer getBoundingClientRect() both
+// use device-independent/CSS pixels. setThumbarButtons drops an existing
+// clip, so it is re-applied after every thumbar update.
+let taskbarClipRect = null;
 
-function detectGpuVendorAsync() {
-  if (gpuDetectPromise) return gpuDetectPromise;
-  gpuDetectPromise = new Promise((resolve) => {
-    try {
-      execFile(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-Command",
-          "(Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty PNPDeviceID)",
-        ],
-        { windowsHide: true, timeout: 5000 },
-        (error, stdout) => {
-          const match = String(stdout || "").match(/VEN_([0-9A-Fa-f]{4})/);
-          resolve(match ? Number.parseInt(match[1], 16) : null);
-        },
-      );
-    } catch {
-      resolve(null);
+function applyTaskbarClip() {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed() || typeof mainWindow.setThumbnailClip !== "function") return;
+  // Always keep the Electron thumbnail clipped to the square cover. The
+  // native DWM handler supplies the same cover pixels when available, while
+  // Electron remains the reliable fallback on systems that reject custom
+  // iconic thumbnails.
+  try {
+    if (!taskbarClipRect) {
+      mainWindow.setThumbnailClip({ x: 0, y: 0, width: 0, height: 0 });
+      if (lastTaskbarClipLogKey !== "reset") {
+        lastTaskbarClipLogKey = "reset";
+        writeLog("desktop.log", "taskbar thumbnail clip reset");
+      }
+      return;
     }
-  });
-  return gpuDetectPromise;
+
+    const [contentWidth, contentHeight] = mainWindow.getContentSize();
+    const requestedSide = Math.max(8, Math.min(taskbarClipRect.width, taskbarClipRect.height));
+    const requestedX = taskbarClipRect.x + (taskbarClipRect.width - requestedSide) / 2;
+    const requestedY = taskbarClipRect.y + (taskbarClipRect.height - requestedSide) / 2;
+    const x = Math.max(0, Math.min(Math.round(requestedX), Math.max(0, contentWidth - 8)));
+    const y = Math.max(0, Math.min(Math.round(requestedY), Math.max(0, contentHeight - 8)));
+    const side = Math.max(8, Math.min(Math.round(requestedSide), contentWidth - x, contentHeight - y));
+    const clip = { x, y, width: side, height: side };
+    mainWindow.setThumbnailClip(clip);
+
+    const key = `${clip.x}|${clip.y}|${clip.width}|${clip.height}|${contentWidth}|${contentHeight}`;
+    if (lastTaskbarClipLogKey !== key) {
+      lastTaskbarClipLogKey = key;
+      writeLog("desktop.log", `taskbar thumbnail clip applied: ${JSON.stringify(clip)} content=${contentWidth}x${contentHeight}`);
+    }
+  } catch (error) {
+    writeLog("desktop.log", `taskbar thumbnail clip failed: ${error?.stack || error}`);
+  }
 }
+let globalShortcutConfig = {
+  toggle: "Control+Alt+Space",
+  previous: "Control+Alt+Left",
+  next: "Control+Alt+Right",
+  show: "Control+Alt+A",
+};
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
 
-app.setName("Aria测试");
-app.setAppUserModelId("com.yrrlyb.aria.test");
+app.setName("Aria");
+app.setAppUserModelId("com.yrrlyb.aria");
 Menu.setApplicationMenu(null);
+
+function ensureWindowsTaskbarPreviewPolicy() {
+  if (process.platform !== "win32") return;
+  try {
+    // Windows suppresses every taskbar thumbnail when this per-user flag is
+    // set. Aria owns its taskbar card, so make the prerequisite explicit at
+    // startup and ask Explorer to refresh its per-user shell parameters.
+    execFileSync("reg.exe", [
+      "ADD",
+      "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+      "/v",
+      "DisablePreviewDesktop",
+      "/t",
+      "REG_DWORD",
+      "/d",
+      "0",
+      "/f",
+    ], { windowsHide: true, stdio: "ignore" });
+    spawn("rundll32.exe", ["user32.dll,UpdatePerUserSystemParameters"], {
+      windowsHide: true,
+      stdio: "ignore",
+      detached: true,
+    }).unref();
+    writeLog("desktop.log", "taskbar thumbnail preview policy enabled");
+  } catch (error) {
+    writeLog("desktop.log", `taskbar thumbnail preview policy unavailable: ${error?.message || error}`);
+  }
+}
+
+ensureWindowsTaskbarPreviewPolicy();
+
+// Chromium spends GPU process memory on the many frosted-glass layers; keep
+// the app on the integrated GPU when a discrete one is present and cap every
+// V8 heap so long sessions collect garbage instead of growing without bound.
+// MediaSessionService is what publishes playback state to the OS media
+// overlay / lock screen (SMTC) on Windows.
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=256 --expose-gc");
+app.commandLine.appendSwitch("enable-features", "MediaSessionService");
 
 function getNativeAudioEngine() {
   if (!nativeAudioEngine) {
@@ -177,7 +244,9 @@ async function startBackend() {
 
   const serverEntry = resolveServerEntry();
   writeLog("desktop.log", `starting backend: ${serverEntry}`);
-  backendProcess = spawn(process.execPath, [serverEntry], {
+  // Cap the backend V8 heap so long sessions GC eagerly instead of letting V8
+  // grow its old space with machine RAM on large-memory hosts.
+  backendProcess = spawn(process.execPath, ["--max-old-space-size=384", serverEntry], {
     cwd: app.getPath("userData"),
     env: {
       ...process.env,
@@ -224,22 +293,129 @@ function sendPlaybackCommand(command) {
   mainWindow.webContents.send("aria:playback-command", command);
 }
 
-function createTaskbarButtonIcon(pathData) {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
-      <path fill="#20242b" d="${pathData}"/>
-    </svg>
-  `;
-  return nativeImage
-    .createFromDataURL(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`)
-    .resize({ width: 16, height: 16 });
+function executeGlobalShortcut(command) {
+  if (command === "show") {
+    showWindow();
+    return;
+  }
+  sendPlaybackCommand(command);
+}
+
+function sanitizeGlobalShortcut(value, fallback) {
+  if (typeof value !== "string") return fallback;
+  const candidate = value.trim();
+  if (!candidate || candidate.length > 80 || !/(Control|Alt|Shift|Super)/i.test(candidate)) return fallback;
+  return candidate;
+}
+
+function syncGlobalShortcuts(payload = {}) {
+  globalShortcutConfig = {
+    toggle: sanitizeGlobalShortcut(payload.toggle, globalShortcutConfig.toggle),
+    previous: sanitizeGlobalShortcut(payload.previous, globalShortcutConfig.previous),
+    next: sanitizeGlobalShortcut(payload.next, globalShortcutConfig.next),
+    show: sanitizeGlobalShortcut(payload.show, globalShortcutConfig.show),
+  };
+
+  globalShortcut.unregisterAll();
+  const registered = {};
+  const usedAccelerators = new Set();
+  for (const [command, accelerator] of Object.entries(globalShortcutConfig)) {
+    const duplicate = usedAccelerators.has(accelerator.toLowerCase());
+    const success = !duplicate && globalShortcut.register(accelerator, () => executeGlobalShortcut(command));
+    registered[command] = success;
+    if (success) usedAccelerators.add(accelerator.toLowerCase());
+    else writeLog("desktop.log", `global shortcut unavailable: ${command}=${accelerator}`);
+  }
+  return { shortcuts: globalShortcutConfig, registered };
+}
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const value of buffer) {
+    crc ^= value;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([length, typeBuffer, data, checksum]);
+}
+
+function createTaskbarButtonIcon(kind) {
+  const width = 20;
+  const height = 20;
+  const pixels = Buffer.alloc(width * height * 4);
+  const setPixel = (x, y, red = 32, green = 36, blue = 43, alpha = 255) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const offset = (y * width + x) * 4;
+    pixels[offset] = red;
+    pixels[offset + 1] = green;
+    pixels[offset + 2] = blue;
+    pixels[offset + 3] = alpha;
+  };
+  const fillRect = (x, y, rectWidth, rectHeight) => {
+    for (let row = y; row < y + rectHeight; row += 1) {
+      for (let col = x; col < x + rectWidth; col += 1) setPixel(col, row);
+    }
+  };
+  const drawTriangle = (direction, left, right) => {
+    for (let row = 0; row < 12; row += 1) {
+      const distance = row <= 6 ? row : 12 - row;
+      const span = Math.max(1, Math.round((right - left) * distance / 6));
+      const start = direction === "right" ? left : right - span;
+      const end = direction === "right" ? left + span : right;
+      for (let col = Math.min(start, end); col <= Math.max(start, end); col += 1) setPixel(col, 4 + row);
+    }
+  };
+
+  if (kind === "play") drawTriangle("right", 6, 15);
+  else if (kind === "pause") {
+    fillRect(5, 4, 3, 12);
+    fillRect(12, 4, 3, 12);
+  } else if (kind === "previous") {
+    fillRect(4, 4, 2, 12);
+    drawTriangle("left", 8, 15);
+  } else {
+    fillRect(14, 4, 2, 12);
+    drawTriangle("right", 5, 12);
+  }
+
+  const scanlines = Buffer.alloc((height * (width * 4 + 1)));
+  for (let row = 0; row < height; row += 1) {
+    scanlines[row * (width * 4 + 1)] = 0;
+    pixels.copy(scanlines, row * (width * 4 + 1) + 1, row * width * 4, (row + 1) * width * 4);
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const png = Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", header),
+    pngChunk("IDAT", zlib.deflateSync(scanlines, { level: 9 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+  const icon = nativeImage.createFromBuffer(png).resize({ width: 20, height: 20 });
+  if (icon.isEmpty()) {
+    writeLog("desktop.log", `taskbar button icon creation returned an empty image: ${kind}`);
+  }
+  return icon;
 }
 
 const taskbarIcons = {
-  previous: createTaskbarButtonIcon("M4 4h2v5.2L14 4v12L6 10.8V16H4V4Zm4 6 4 3.25v-6.5L8 10Z"),
-  play: createTaskbarButtonIcon("M6 4.2 15 10l-9 5.8V4.2Z"),
-  pause: createTaskbarButtonIcon("M5 4h3v12H5V4Zm7 0h3v12h-3V4Z"),
-  next: createTaskbarButtonIcon("M14 4h2v12h-2v-5.2L6 16V4l8 5.2V4Zm-2 6L8 6.75v6.5L12 10Z"),
+  previous: createTaskbarButtonIcon("previous"),
+  play: createTaskbarButtonIcon("play"),
+  pause: createTaskbarButtonIcon("pause"),
+  next: createTaskbarButtonIcon("next"),
 };
 
 function taskbarDescription() {
@@ -249,60 +425,79 @@ function taskbarDescription() {
   return artist ? `${title} - ${artist}` : title;
 }
 
-function syncTaskbarPlayback() {
+function syncTaskbarPlayback(reason = "state") {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   const description = taskbarDescription();
-  mainWindow.setTitle(`Aria - ${description}`);
+  // Keep the native app identity stable for OOPZ/application-loopback. The
+  // song title is published through the thumbnail tooltip and media session.
+  mainWindow.setTitle("Aria");
   mainWindow.setThumbnailToolTip(description);
   tray?.setToolTip(description);
 
   if (process.platform !== "win32") return;
   const hasTrack = Boolean(taskbarPlayback.title);
-  mainWindow.setThumbarButtons([
-    {
-      tooltip: "上一首",
-      icon: taskbarIcons.previous,
-      flags: hasTrack ? [] : ["disabled"],
-      click: () => sendPlaybackCommand("previous"),
-    },
-    {
-      tooltip: taskbarPlayback.playing ? "暂停" : "播放",
-      icon: taskbarPlayback.playing ? taskbarIcons.pause : taskbarIcons.play,
-      flags: hasTrack ? [] : ["disabled"],
-      click: () => sendPlaybackCommand("toggle"),
-    },
-    {
-      tooltip: "下一首",
-      icon: taskbarIcons.next,
-      flags: hasTrack ? [] : ["disabled"],
-      click: () => sendPlaybackCommand("next"),
-    },
-  ]);
-}
-
-function registerGlobalArrowKeys() {
-  if (!globalArrowKeysEnabled || globalArrowKeysRegistered) return;
-  const leftOk = globalShortcut.register("Left", () => sendPlaybackCommand("previous"));
-  const rightOk = globalShortcut.register("Right", () => sendPlaybackCommand("next"));
-  globalArrowKeysRegistered = leftOk && rightOk;
-  if (!globalArrowKeysRegistered) {
-    writeLog("desktop.log", `global arrow keys registration failed: left=${leftOk} right=${rightOk}`);
+  if (nativeIconicThumbnailEnabled && iconicThumbAddon?.available) {
+    try {
+      const stats = iconicThumbAddon.getStats?.();
+      if (stats && stats.taskbarButtonReady === false && !reason.includes("fallback")) {
+        writeLog("desktop.log", `taskbar buttons waiting for TaskbarButtonCreated reason=${reason}`);
+        return;
+      }
+    } catch {
+      // The optional readiness probe is best effort; Electron remains the fallback.
+    }
   }
+  try {
+    const applied = mainWindow.setThumbarButtons([
+      {
+        tooltip: "Previous",
+        icon: taskbarIcons.previous,
+        flags: hasTrack ? [] : ["disabled"],
+        click: () => sendPlaybackCommand("previous"),
+      },
+      {
+        tooltip: taskbarPlayback.playing ? "Pause" : "Play",
+        icon: taskbarPlayback.playing ? taskbarIcons.pause : taskbarIcons.play,
+        flags: hasTrack ? [] : ["disabled"],
+        click: () => sendPlaybackCommand("toggle"),
+      },
+      {
+        tooltip: "Next",
+        icon: taskbarIcons.next,
+        flags: hasTrack ? [] : ["disabled"],
+        click: () => sendPlaybackCommand("next"),
+      },
+    ]);
+    const iconState = Object.entries(taskbarIcons)
+      .map(([name, icon]) => `${name}:${icon.isEmpty() ? "empty" : icon.getSize().width + "x" + icon.getSize().height}`)
+      .join(",");
+    writeLog(
+      "desktop.log",
+      `taskbar buttons applied: ${Boolean(applied)} track=${hasTrack} visible=${mainWindow.isVisible()} reason=${reason} icons=${iconState}`,
+    );
+  } catch (error) {
+    writeLog("desktop.log", `taskbar buttons failed: ${error?.stack || error}`);
+  }
+  // setThumbarButtons clears an existing thumbnail clip; restore it so the
+  // preview keeps showing the cover art instead of the whole window.
+  applyTaskbarClip();
+  const clipTimer = setTimeout(applyTaskbarClip, 80);
+  clipTimer.unref?.();
 }
 
-function unregisterGlobalArrowKeys() {
-  if (!globalArrowKeysRegistered) return;
-  globalShortcut.unregister("Left");
-  globalShortcut.unregister("Right");
-  globalArrowKeysRegistered = false;
-}
+function scheduleTaskbarSync(reason) {
+  for (const timer of taskbarRetryTimers) clearTimeout(timer);
+  taskbarRetryTimers.clear();
 
-function syncGlobalArrowKeys() {
-  if (globalArrowKeysEnabled && (!mainWindow || !mainWindow.isFocused() || !mainWindow.isVisible())) {
-    registerGlobalArrowKeys();
-  } else {
-    unregisterGlobalArrowKeys();
+  syncTaskbarPlayback(`${reason}:now`);
+  for (const delay of [100, 300, 700, 1500, 3000, 5000]) {
+    const timer = setTimeout(() => {
+      taskbarRetryTimers.delete(timer);
+      syncTaskbarPlayback(`${reason}:${delay}ms${delay === 5000 ? ":fallback" : ""}`);
+    }, delay);
+    timer.unref?.();
+    taskbarRetryTimers.add(timer);
   }
 }
 
@@ -356,11 +551,39 @@ async function createWindow() {
   });
   mainWindow.removeMenu();
   mainWindow.setMenuBarVisibility(false);
+  if (process.platform === "win32" && typeof mainWindow.setAppDetails === "function") {
+    // Keep the native window identity stable so Windows application-loopback
+    // capture tools can associate the mpv child session with Aria.
+    try {
+      mainWindow.setAppDetails({
+        appId: "com.yrrlyb.aria",
+        appIconPath: resolveIcon(),
+        appIconIndex: 0,
+        relaunchDisplayName: "Aria",
+        relaunchCommand: process.execPath,
+      });
+    } catch (error) {
+      writeLog("desktop.log", `unable to set Windows app details: ${error?.stack || error}`);
+    }
+  }
+  if (nativeIconicThumbnailEnabled && iconicThumbAddon?.available) {
+    try {
+      const attached = iconicThumbAddon.attach(mainWindow.getNativeWindowHandle());
+      writeLog("desktop.log", `iconic thumbnail addon attached: ${Boolean(attached)}`);
+    } catch (error) {
+      writeLog("desktop.log", `iconic thumbnail attach failed: ${error?.message || error}`);
+    }
+  }
+
   syncTaskbarPlayback();
 
   mainWindow.once("ready-to-show", () => {
     showWindow();
-    syncTaskbarPlayback();
+    scheduleTaskbarSync("ready-to-show");
+  });
+
+  mainWindow.webContents.once("did-finish-load", () => {
+    scheduleTaskbarSync("did-finish-load");
   });
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
@@ -387,26 +610,20 @@ async function createWindow() {
       mainWindow.hide();
     }
   });
-  mainWindow.on("hide", () => {
-    sendWindowVisibility(false);
-    syncGlobalArrowKeys();
-  });
-  mainWindow.on("minimize", () => {
-    sendWindowVisibility(false);
-    syncGlobalArrowKeys();
-  });
+  mainWindow.on("hide", () => sendWindowVisibility(false));
+  mainWindow.on("minimize", () => sendWindowVisibility(false));
   mainWindow.on("show", () => {
     sendWindowVisibility(true);
-    syncTaskbarPlayback();
-    syncGlobalArrowKeys();
+    scheduleTaskbarSync("show");
   });
   mainWindow.on("restore", () => {
     sendWindowVisibility(true);
-    syncTaskbarPlayback();
-    syncGlobalArrowKeys();
+    scheduleTaskbarSync("restore");
   });
-  mainWindow.on("focus", () => syncGlobalArrowKeys());
-  mainWindow.on("blur", () => syncGlobalArrowKeys());
+  mainWindow.on("closed", () => {
+    for (const timer of taskbarRetryTimers) clearTimeout(timer);
+    taskbarRetryTimers.clear();
+  });
 
   if (!app.isPackaged) {
     const devUrl = process.env.ARIA_DEV_SERVER_URL || "http://127.0.0.1:5173";
@@ -458,137 +675,14 @@ ipcMain.handle("aria:set-background-enabled", (_event, enabled) => {
   return backgroundEnabled;
 });
 
-ipcMain.handle("aria:set-global-arrow-keys", (_event, enabled) => {
-  globalArrowKeysEnabled = Boolean(enabled);
-  syncGlobalArrowKeys();
-  return globalArrowKeysEnabled;
-});
-
-ipcMain.handle("aria:set-gpu-optimize", (_event, enabled) => {
-  gpuOptimizeEnabled = Boolean(enabled);
-  try {
-    fs.mkdirSync(app.getPath("userData"), { recursive: true });
-    fs.writeFileSync(
-      path.join(app.getPath("userData"), "gpu-mode.json"),
-      JSON.stringify({ optimize: gpuOptimizeEnabled }),
-      "utf8",
-    );
-  } catch {
-    // Persistence is best-effort.
-  }
-  return gpuOptimizeEnabled;
-});
-
-async function collectDiagnosticsSnapshot(payload) {
-  const metrics = app.getAppMetrics().map((metric) => ({
-    type: metric.type,
-    pid: metric.pid,
-    cpuPercent: Math.round((metric.cpu?.percentCPUUsage ?? 0) * 10) / 10,
-    memoryMb: Math.round((metric.memory?.workingSetSize ?? 0) / 1024 / 1024),
-  }));
-  let backendMemoryMb = null;
-  if (backendProcess?.pid) {
-    try {
-      const memory = await process.getProcessMemoryInfo(backendProcess.pid);
-      backendMemoryMb = Math.round(memory.workingSetSize / 1024 / 1024);
-    } catch {
-      backendMemoryMb = null;
-    }
-  }
-  return {
-    generatedAt: new Date().toISOString(),
-    appVersion: app.getVersion(),
-    electronVersion: process.versions.electron,
-    nodeVersion: process.versions.node,
-    platform: process.platform,
-    arch: process.arch,
-    cpuModel: (() => {
-      try {
-        return os.cpus()[0]?.model ?? null;
-      } catch {
-        return null;
-      }
-    })(),
-    cpuCores: os.cpus().length,
-    pid: process.pid,
-    uptimeSeconds: Math.round(process.uptime()),
-    mainMemoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
-    backendPid: backendProcess?.pid ?? null,
-    backendMemoryMb,
-    gpuVendorId,
-    gpuOptimizeEnabled,
-    gpuFeatures: (() => {
-      try {
-        const status = app.getGPUFeatureStatus();
-        return {
-          gpuCompositing: status.gpu_compositing ?? "unknown",
-          rasterization: status.rasterization ?? "unknown",
-          webgl: status.webgl ?? "unknown",
-          canvas2d: status["2d_canvas"] ?? "unknown",
-          videoDecode: status.video_decode ?? "unknown",
-        };
-      } catch {
-        return null;
-      }
-    })(),
-    processes: metrics,
-    runtime: payload && typeof payload === "object" ? payload : null,
-  };
-}
-
-ipcMain.handle("aria:diagnostics:stats", async () => {
-  try {
-    return await collectDiagnosticsSnapshot(null);
-  } catch (error) {
-    writeLog("desktop.log", `diagnostics stats failed: ${error?.stack || error}`);
-    return null;
-  }
-});
-
-ipcMain.handle("aria:diagnostics:export-logs", async (_event, payload) => {
-  try {
-    const logsDir = logger.logDir();
-    const exportBase = path.join(app.getPath("userData"), "exports");
-    const folderName = `aria-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}`;
-    const folder = path.join(exportBase, folderName);
-    fs.mkdirSync(folder, { recursive: true });
-
-    let copiedLogs = 0;
-    if (fs.existsSync(logsDir)) {
-      for (const file of fs.readdirSync(logsDir)) {
-        const source = path.join(logsDir, file);
-        try {
-          const stat = fs.statSync(source);
-          if (stat.isFile() && stat.size <= 5 * 1024 * 1024) {
-            fs.copyFileSync(source, path.join(folder, file));
-            copiedLogs += 1;
-          }
-        } catch {
-          // Skip unreadable log files.
-        }
-      }
-    }
-
-    const snapshot = await collectDiagnosticsSnapshot(payload);
-    fs.writeFileSync(path.join(folder, "diagnostics.json"), JSON.stringify(snapshot, null, 2), "utf8");
-    fs.writeFileSync(
-      path.join(folder, "说明.txt"),
-      [
-        "Aria 诊断导出",
-        `生成时间: ${snapshot.generatedAt}`,
-        `包含: 日志文件 ${copiedLogs} 个 + diagnostics.json（各进程 CPU/内存占用与运行状态快照）`,
-        "请将此文件夹整体发送给开发者排查问题。",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    shell.openPath(folder);
-    return { ok: true, path: folder, copiedLogs };
-  } catch (error) {
-    writeLog("desktop.log", `export logs failed: ${error?.stack || error}`);
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
+ipcMain.handle("aria:choose-music-folder", async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "选择本地音乐文件夹",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  return result.filePaths[0];
 });
 
 ipcMain.handle("aria:update-taskbar-playback", (_event, payload) => {
@@ -599,6 +693,10 @@ ipcMain.handle("aria:update-taskbar-playback", (_event, payload) => {
   };
   syncTaskbarPlayback();
   return true;
+});
+
+ipcMain.handle("aria:configure-global-shortcuts", (_event, payload) => {
+  return syncGlobalShortcuts(payload || {});
 });
 
 ipcMain.handle("aria:copy-image", async (_event, payload) => {
@@ -653,6 +751,70 @@ ipcMain.handle("aria:native-audio:load", async (_event, payload) => {
   return getNativeAudioEngine().load(payload);
 });
 
+ipcMain.handle("aria:native-audio:load-next", async (_event, payload) => {
+  return getNativeAudioEngine().loadNext(payload || {});
+});
+
+ipcMain.handle("aria:set-thumbnail-clip", (_event, rect) => {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return false;
+  const valid =
+    rect &&
+    Number.isFinite(rect.x) &&
+    Number.isFinite(rect.y) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width >= 8 &&
+    rect.height >= 8;
+  taskbarClipRect = valid
+    ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+    : null;
+  applyTaskbarClip();
+  return true;
+});
+
+ipcMain.handle("aria:set-iconic-thumbnail", (_event, pixels, width, height) => {
+  if (!nativeIconicThumbnailEnabled || !iconicThumbAddon?.available) return false;
+  try {
+    const ok = Boolean(iconicThumbAddon.setBitmap(Buffer.from(pixels), Number(width) || 0, Number(height) || 0));
+    writeLog("desktop.log", `iconic thumbnail setBitmap: ${Number(width)}x${Number(height)} ok=${ok}`);
+    return ok;
+  } catch (error) {
+    writeLog("desktop.log", `iconic thumbnail setBitmap failed: ${error?.message || error}`);
+    return false;
+  }
+});
+
+ipcMain.handle("aria:set-iconic-live-preview", (_event, pixels, width, height) => {
+  if (!nativeIconicThumbnailEnabled || !iconicThumbAddon?.available || typeof iconicThumbAddon.setLiveBitmap !== "function") return false;
+  try {
+    const ok = Boolean(iconicThumbAddon.setLiveBitmap(Buffer.from(pixels), Number(width) || 0, Number(height) || 0));
+    writeLog("desktop.log", `iconic live preview setBitmap: ${Number(width)}x${Number(height)} ok=${ok}`);
+    return ok;
+  } catch (error) {
+    writeLog("desktop.log", `iconic live preview setBitmap failed: ${error?.message || error}`);
+    return false;
+  }
+});
+
+ipcMain.handle("aria:iconic-stats", () => {
+  if (!nativeIconicThumbnailEnabled || !iconicThumbAddon?.available) return null;
+  try {
+    return iconicThumbAddon.getStats();
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle("aria:clear-iconic-thumbnail", () => {
+  if (!nativeIconicThumbnailEnabled || !iconicThumbAddon?.available) return false;
+  try {
+    iconicThumbAddon.clearBitmap();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
 ipcMain.handle("aria:native-audio:pause", async (_event, paused) => {
   return getNativeAudioEngine().setPaused(Boolean(paused));
 });
@@ -676,20 +838,9 @@ ipcMain.handle("aria:native-audio:stop", async () => {
 app.on("second-instance", showWindow);
 
 app.whenReady().then(async () => {
-  gpuVendorId = await detectGpuVendorAsync();
-  if (gpuVendorId === 0x1002 && gpuOptimizeEnabled) {
-    // AMD GPUs are often blocklisted by Chromium for GPU compositing, which
-    // falls back to CPU software rendering and drives CPU usage up. Push the
-    // rendering work back to the GPU for AMD machines.
-    app.commandLine.appendSwitch("ignore-gpu-blocklist");
-    app.commandLine.appendSwitch("enable-gpu-rasterization");
-    app.commandLine.appendSwitch("enable-zero-copy");
-    writeLog("desktop.log", "AMD GPU detected; GPU rendering flags applied");
-  } else {
-    writeLog("desktop.log", `GPU vendor id: 0x${(gpuVendorId ?? 0).toString(16)} (optimize=${gpuOptimizeEnabled})`);
-  }
   attachPowerRecoveryHandlers();
   await createWindow();
+  syncGlobalShortcuts(globalShortcutConfig);
 });
 
 app.on("activate", () => {
@@ -705,9 +856,10 @@ app.on("before-quit", () => {
 });
 
 app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
   if (backendProcess && !backendProcess.killed) {
     backendProcess.kill();
   }
   nativeAudioEngine?.teardown?.();
-  globalShortcut.unregisterAll();
+  iconicThumbAddon?.detach?.();
 });

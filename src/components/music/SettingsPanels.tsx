@@ -1,49 +1,27 @@
-import { useEffect, useState, type CSSProperties } from "react";
+﻿import { useEffect, useState, type CSSProperties } from "react";
+import { useRef } from "react";
 import { motion } from "framer-motion";
-import { Cookie, Download, LogOut, Radio, RefreshCw, Settings2, Sparkles, UserRound, Volume2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Cookie, FolderSearch, Keyboard, Radio, RefreshCw, RotateCcw, Settings2, Sparkles, UserRound, Volume2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Metric } from "@/components/music/shared";
-import { api, type DiagnosticsStats, type NeteaseAccountSummary, type NeteaseQrStart, type RuntimeInfo } from "@/lib/api";
+import { api, type NeteaseAccountSummary, type NeteaseQrStart } from "@/lib/api";
 import type { NativeAudioState } from "@/lib/audioTypes";
 import type { AudioOutputMode } from "@/lib/playerPresentation";
+import {
+  defaultKeyboardShortcuts,
+  formatShortcut,
+  shortcutDefinitions,
+  shortcutFromKeyboardEvent,
+  shortcutsConflict,
+  type KeyboardShortcuts,
+  type ShortcutCommand,
+} from "@/lib/keyboardShortcuts";
 import { cn } from "@/lib/utils";
-
-const processLabel: Record<string, string> = {
-  browser: "主进程",
-  renderer: "界面渲染",
-  tab: "界面渲染",
-  gpu: "GPU",
-  utility: "工具进程",
-  zygote: "辅助进程",
-  network: "网络服务",
-};
-
-function gpuVendorLabel(vendorId: number | null) {
-  if (vendorId === 0x10de) return "NVIDIA";
-  if (vendorId === 0x1002) return "AMD";
-  if (vendorId === 0x8086) return "Intel";
-  return vendorId ? `0x${vendorId.toString(16)}` : "未知";
-}
-
-function featureLabel(value: string) {
-  if (value === "enabled") return "硬件加速";
-  if (value === "disabled_software") return "软件渲染(CPU)";
-  if (value === "disabled_off") return "已禁用";
-  if (value === "unavailable") return "不可用";
-  return value;
-}
-
 export function SettingsPanel({
   backgroundEnabled,
   onBackgroundEnabledChange,
-  globalArrowKeysEnabled,
-  onGlobalArrowKeysChange,
-  perfMode,
-  onPerfModeChange,
   neteaseAccount,
-  onLogoutNetease,
-  runtimeInfo,
   libraryMeta,
   trackCount,
   likedCount,
@@ -55,22 +33,20 @@ export function SettingsPanel({
   onSelectedSinkIdChange,
   hifiEnabled,
   onHifiEnabledChange,
+  gaplessEnabled,
+  onGaplessEnabledChange,
   nativeAudioSupported,
   nativeAudioState,
   audioOutputMode,
   onAudioOutputModeChange,
   exclusiveMode,
+  keyboardShortcuts,
+  onKeyboardShortcutsChange,
   onClose,
 }: {
   backgroundEnabled: boolean;
   onBackgroundEnabledChange: (value: boolean) => void;
-  globalArrowKeysEnabled: boolean;
-  onGlobalArrowKeysChange: (value: boolean) => void;
-  perfMode: boolean;
-  onPerfModeChange: (value: boolean) => void;
   neteaseAccount: NeteaseAccountSummary | null;
-  onLogoutNetease: () => void;
-  runtimeInfo: RuntimeInfo;
   libraryMeta: { roots: number; updatedAt: string | null };
   trackCount: number;
   likedCount: number;
@@ -82,11 +58,15 @@ export function SettingsPanel({
   onSelectedSinkIdChange: (value: string) => void;
   hifiEnabled: boolean;
   onHifiEnabledChange: (value: boolean) => void;
+  gaplessEnabled: boolean;
+  onGaplessEnabledChange: (value: boolean) => void;
   nativeAudioSupported: boolean;
   nativeAudioState: NativeAudioState | null;
   audioOutputMode: AudioOutputMode;
   onAudioOutputModeChange: (value: AudioOutputMode) => void;
   exclusiveMode: boolean;
+  keyboardShortcuts: KeyboardShortcuts;
+  onKeyboardShortcutsChange: (shortcuts: KeyboardShortcuts) => void;
   onClose: () => void;
 }) {
   const [apiState, setApiState] = useState<"checking" | "online" | "offline">("checking");
@@ -120,103 +100,21 @@ export function SettingsPanel({
     };
   }, []);
 
-  const [diagStats, setDiagStats] = useState<DiagnosticsStats | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [exportMessage, setExportMessage] = useState<string | null>(null);
-  const [fps, setFps] = useState(0);
-
-  useEffect(() => {
-    let frames = 0;
-    let rafId = 0;
-    let sampling = false;
-    let sampleTimer = 0;
-    let restTimer = 0;
-    const count = () => {
-      frames += 1;
-      rafId = window.requestAnimationFrame(count);
-    };
-    const start = () => {
-      frames = 0;
-      sampling = true;
-      rafId = window.requestAnimationFrame(count);
-      sampleTimer = window.setTimeout(() => {
-        const elapsed = 1; // 采样 1 秒
-        setFps(elapsed > 0 ? Math.round(frames / elapsed) : 0);
-        sampling = false;
-        if (rafId) window.cancelAnimationFrame(rafId);
-        rafId = 0;
-        restTimer = window.setTimeout(start, 2000);
-      }, 1000);
-    };
-    start();
-    return () => {
-      window.clearTimeout(sampleTimer);
-      window.clearTimeout(restTimer);
-      if (rafId) window.cancelAnimationFrame(rafId);
-    };
-  }, []);
-
-  function refreshDiagnostics() {
-    window.ariaDesktop?.diagnostics?.getStats?.()
-      .then((stats) => {
-        if (stats) setDiagStats(stats);
-      })
-      .catch(() => undefined);
-  }
-
-  useEffect(() => {
-    refreshDiagnostics();
-    const timer = window.setInterval(refreshDiagnostics, 2000);
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function exportLogs() {
-    setExporting(true);
-    setExportMessage(null);
-    try {
-      const result = await window.ariaDesktop?.diagnostics?.exportLogs?.({ ...runtimeInfo, fps });
-      if (result?.ok) {
-        setExportMessage(`已导出 ${result.copiedLogs ?? 0} 个日志文件 → ${result.path}`);
-      } else {
-        setExportMessage(result?.error ?? "导出失败");
-      }
-    } catch {
-      setExportMessage("导出失败，请确认桌面版运行环境");
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
-    <motion.div
-      className="absolute inset-0 z-[70] flex justify-end bg-white/28 backdrop-blur-[2px]"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <motion.aside
-        initial={{ x: 34, opacity: 0, filter: "blur(12px)" }}
-        animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-        exit={{ x: 28, opacity: 0, filter: "blur(12px)" }}
-        transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-        className="m-3 flex w-[min(26rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[1.7rem] border border-white/75 bg-white/78 shadow-[0_24px_80px_rgba(47,55,76,0.18)] backdrop-blur-2xl"
-      >
-        <div className="flex items-center justify-between gap-3 border-b border-neutral-950/6 px-5 py-4">
+    <div className="glass flex h-full min-h-[620px] flex-col overflow-hidden rounded-[1.5rem] border border-white/75 shadow-[0_24px_80px_rgba(47,55,76,0.14)]">
+        <div className="flex items-center justify-between gap-3 border-b border-neutral-950/6 px-5 py-4 sm:px-7">
           <div className="min-w-0">
             <p className="text-xs font-semibold uppercase tracking-[0.24em] text-neutral-400">Settings</p>
-            <h2 className="mt-1 text-2xl font-semibold">Aria 设置</h2>
+            <h1 className="mt-1 text-2xl font-semibold sm:text-3xl">Aria 设置</h1>
           </div>
-          <Button variant="ghost" size="icon" aria-label="关闭设置" onClick={onClose}>
-            <X />
+          <Button variant="glass" size="sm" aria-label="返回上一页" onClick={onClose}>
+            <ArrowLeft />
+            返回
           </Button>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+        <div className="no-scrollbar grid min-h-0 flex-1 grid-cols-1 content-start gap-4 overflow-y-auto p-5 sm:p-7 lg:grid-cols-2">
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Runtime</p>
@@ -266,6 +164,11 @@ export function SettingsPanel({
             </div>
           </section>
 
+          <KeyboardShortcutSettings
+            shortcuts={keyboardShortcuts}
+            onChange={onKeyboardShortcutsChange}
+          />
+
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -307,15 +210,9 @@ export function SettingsPanel({
                 <p className="mt-1 truncate text-xs text-neutral-500">{neteaseAccount?.cookiePreview ?? "右上角头像里绑定"}</p>
               </div>
             </div>
-            {neteaseAccount?.connected && (
-              <Button variant="ghost" size="sm" className="mt-3 w-full" onClick={onLogoutNetease}>
-                <LogOut />
-                退出登录
-              </Button>
-            )}
           </section>
 
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Audio</p>
@@ -335,7 +232,7 @@ export function SettingsPanel({
                 style={
                   {
                     "--range-color": "#171717",
-                    "--range-value": `${volume}%`,
+                    "--range-value": Math.min(1, Math.max(0, volume / 100)),
                   } as CSSProperties
                 }
               />
@@ -354,14 +251,14 @@ export function SettingsPanel({
                     mode: "system" as const,
                     label: "系统音频",
                     badge: "兼容",
-                    desc: "HTMLAudio 输出，频谱直接跟随播放器。",
+                    desc: "WASAPI 共享输出，频谱直接跟随播放器。",
                     Icon: Volume2,
                   },
                   {
                     mode: "shared" as const,
                     label: "WASAPI 共享",
-                    badge: "HiFi",
-                    desc: "后端 mpv 播放，不独占设备。",
+                    badge: "兼容",
+                    desc: "独立 Aria 音频会话，适合 OOPZ 等应用共享。",
                     Icon: Radio,
                   },
                   {
@@ -493,166 +390,158 @@ export function SettingsPanel({
                 />
               </button>
             </div>
-          </section>
-
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-[1rem] bg-neutral-950/[0.03] p-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Shortcut</p>
-                <h3 className="mt-1 text-base font-semibold">左右键切歌</h3>
+                <p className="text-sm font-semibold">无缝衔接</p>
+                <p className="mt-1 text-xs text-neutral-500">提前加载下一首，减少歌曲切换时的空隙。</p>
               </div>
               <button
                 className={cn(
                   "flex h-8 w-14 items-center rounded-full p-1 transition",
-                  globalArrowKeysEnabled ? "bg-neutral-950" : "bg-neutral-200",
+                  gaplessEnabled ? "bg-neutral-950" : "bg-neutral-200",
                 )}
-                onClick={() => onGlobalArrowKeysChange(!globalArrowKeysEnabled)}
-                aria-label="切换左右键切歌"
+                onClick={() => onGaplessEnabledChange(!gaplessEnabled)}
+                aria-label="切换无缝衔接"
+                aria-pressed={gaplessEnabled}
               >
                 <span
                   className={cn(
                     "size-6 rounded-full bg-white shadow-sm transition",
-                    globalArrowKeysEnabled && "translate-x-6",
+                    gaplessEnabled && "translate-x-6",
                   )}
                 />
               </button>
             </div>
-            <p className="mt-3 text-xs leading-relaxed text-neutral-500">
-              开启后，在 Aria 内或切到其他软件时，按键盘 ← / → 方向键即可切换上一首/下一首；输入框内方向键仍用于移动光标，不受影响。
-            </p>
-          </section>
-
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Diagnostics</p>
-                <h3 className="mt-1 text-base font-semibold">诊断与日志</h3>
-              </div>
-              <Badge>{diagStats ? `${diagStats.processes.length} 进程` : "..."}</Badge>
-            </div>
-
-            {diagStats?.processes?.length ? (
-              <div className="mt-3 space-y-1.5">
-                {diagStats.processes.map((process) => (
-                  <div
-                    key={`${process.type}-${process.pid}`}
-                    className="flex items-center justify-between gap-2 rounded-[0.9rem] bg-white/55 px-3 py-1.5 text-xs"
-                  >
-                    <span className="font-medium text-neutral-600">{processLabel[process.type] ?? process.type}</span>
-                    <span className="text-neutral-500">
-                      CPU {process.cpuPercent.toFixed(1)}% · 内存 {process.memoryMb} MB
-                    </span>
-                  </div>
-                ))}
-                {diagStats.backendPid != null && (
-                  <div className="flex items-center justify-between gap-2 rounded-[0.9rem] bg-white/55 px-3 py-1.5 text-xs">
-                    <span className="font-medium text-neutral-600">本地后端</span>
-                    <span className="text-neutral-500">内存 {diagStats.backendMemoryMb ?? "--"} MB</span>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="mt-3 text-xs text-neutral-500">正在读取进程占用…</p>
-            )}
-
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-neutral-600">性能模式</p>
-                <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
-                  关闭毛玻璃等合成效果，可明显降低界面渲染 CPU（A 卡/低配机建议开启）
-                </p>
-              </div>
-              <button
-                className={cn(
-                  "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
-                  perfMode ? "bg-neutral-950" : "bg-neutral-200",
-                )}
-                onClick={() => onPerfModeChange(!perfMode)}
-                aria-label="切换性能模式"
-              >
-                <span className={cn("size-5 rounded-full bg-white shadow-sm transition", perfMode && "translate-x-5")} />
-              </button>
-            </div>
-
-            <div className="mt-2 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
-              <div className="min-w-0">
-                <p className="text-xs font-medium text-neutral-600">AMD GPU 渲染优化</p>
-                <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
-                  A 卡启动时强制 GPU 渲染；关闭后重启可对比 CPU 占用（当前：{diagStats ? (diagStats.gpuOptimizeEnabled ? "开启" : "关闭") : "--"}）
-                </p>
-              </div>
-              <button
-                className={cn(
-                  "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
-                  diagStats?.gpuOptimizeEnabled ? "bg-neutral-950" : "bg-neutral-200",
-                )}
-                onClick={() => {
-                  const next = !(diagStats?.gpuOptimizeEnabled ?? true);
-                  window.ariaDesktop?.diagnostics?.setGpuOptimize?.(next).catch(() => undefined);
-                  setDiagStats((current) => (current ? { ...current, gpuOptimizeEnabled: next } : current));
-                  setExportMessage("GPU 渲染优化已切换，重启 Aria 后生效");
-                }}
-                aria-label="切换 AMD GPU 渲染优化"
-              >
-                <span
-                  className={cn(
-                    "size-5 rounded-full bg-white shadow-sm transition",
-                    diagStats?.gpuOptimizeEnabled && "translate-x-5",
-                  )}
-                />
-              </button>
-            </div>
-
-            <div className="mt-3 flex gap-2">
-              <Button size="sm" className="flex-1" onClick={() => void exportLogs()} disabled={exporting}>
-                <Download />
-                {exporting ? "导出中…" : "导出日志"}
-              </Button>
-              <Button size="sm" variant="subtle" className="flex-1" onClick={refreshDiagnostics}>
-                <RefreshCw />
-                刷新
-              </Button>
-            </div>
-            {exportMessage && <p className="mt-3 break-all text-xs text-neutral-500">{exportMessage}</p>}
-            <p className="mt-3 text-xs leading-relaxed text-neutral-500">
-              {diagStats
-                ? `v${diagStats.appVersion} · 已运行 ${Math.round(diagStats.uptimeSeconds / 60)} 分钟 · 主进程内存 ${diagStats.mainMemoryMb} MB · 当前视图 ${runtimeInfo.view} · 输出 ${runtimeInfo.outputMode}`
-                : "导出日志后会自动打开文件夹，把整个文件夹发给开发者即可排查 CPU 占用等问题。"}
-            </p>
-            {diagStats && (
-              <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-                渲染帧率 {fps} fps · CPU {diagStats.cpuModel ?? "未知"}（{diagStats.cpuCores} 核）· 显卡 {gpuVendorLabel(diagStats.gpuVendorId)}
-                {diagStats.gpuFeatures
-                  ? ` · 合成 ${featureLabel(diagStats.gpuFeatures.gpuCompositing)} · 光栅化 ${featureLabel(diagStats.gpuFeatures.rasterization)}`
-                  : ""}
-              </p>
-            )}
           </section>
         </div>
-        <div className="flex items-center justify-between border-t border-neutral-950/6 px-5 py-3 text-xs text-neutral-400">
+        <div className="flex items-center justify-between border-t border-neutral-950/6 px-5 py-3 text-xs text-neutral-400 sm:px-7">
           <span>Aria Desktop</span>
           <span>v{__APP_VERSION__}</span>
         </div>
-      </motion.aside>
-    </motion.div>
+    </div>
+  );
+}
+
+function KeyboardShortcutSettings({
+  shortcuts,
+  onChange,
+}: {
+  shortcuts: KeyboardShortcuts;
+  onChange: (shortcuts: KeyboardShortcuts) => void;
+}) {
+  const [recording, setRecording] = useState<ShortcutCommand | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!recording) return;
+
+    const captureShortcut = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(null);
+        setMessage(null);
+        return;
+      }
+
+      const candidate = shortcutFromKeyboardEvent(event);
+      if (!candidate) {
+        setMessage("请按住 Ctrl、Alt、Shift 或 Win，再按一个功能键。");
+        return;
+      }
+      if (shortcutsConflict(shortcuts, recording, candidate)) {
+        setMessage("该组合已分配给其他操作。");
+        return;
+      }
+
+      onChange({ ...shortcuts, [recording]: candidate });
+      setRecording(null);
+      setMessage(null);
+    };
+
+    window.addEventListener("keydown", captureShortcut, true);
+    return () => window.removeEventListener("keydown", captureShortcut, true);
+  }, [onChange, recording, shortcuts]);
+
+  return (
+    <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Shortcuts</p>
+          <h3 className="mt-1 text-base font-semibold">全局快捷键</h3>
+        </div>
+        <Keyboard className="size-5 text-neutral-400" />
+      </div>
+      <p className="mt-2 text-xs leading-5 text-neutral-500">后台托管或切到其他软件时仍可使用。点击组合键后直接按新的按键。</p>
+      <div className="mt-3 space-y-2">
+        {shortcutDefinitions.map((definition) => {
+          const isRecording = recording === definition.command;
+          return (
+            <div key={definition.command} className="flex items-center gap-3 rounded-[1rem] bg-white/56 px-3 py-2.5 shadow-sm">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">{definition.label}</p>
+                <p className="mt-0.5 truncate text-xs text-neutral-500">{definition.description}</p>
+              </div>
+              <button
+                type="button"
+                className={cn(
+                  "min-w-28 rounded-xl border px-3 py-2 text-xs font-semibold transition",
+                  isRecording
+                    ? "border-neutral-950 bg-neutral-950 text-white shadow-[0_10px_22px_rgba(23,23,23,0.16)]"
+                    : "border-neutral-950/10 bg-white text-neutral-700 hover:border-neutral-950/30",
+                )}
+                onClick={() => {
+                  setRecording(definition.command);
+                  setMessage(null);
+                }}
+              >
+                {isRecording ? "按下组合键" : formatShortcut(shortcuts[definition.command])}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
+        <p className="min-h-4 text-xs text-rose-500">{message}</p>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            onChange({ ...defaultKeyboardShortcuts });
+            setRecording(null);
+            setMessage(null);
+          }}
+        >
+          <RotateCcw />
+          恢复默认
+        </Button>
+      </div>
+    </section>
   );
 }
 
 export function AccountPanel({
   onClose,
   onAccountChange,
+  initialAccount = null,
+  embedded = false,
 }: {
   onClose: () => void;
   onAccountChange?: (account: NeteaseAccountSummary) => void;
+  initialAccount?: NeteaseAccountSummary | null;
+  embedded?: boolean;
 }) {
   const [cookie, setCookie] = useState("");
-  const [account, setAccount] = useState<NeteaseAccountSummary | null>(null);
+  const [account, setAccount] = useState<NeteaseAccountSummary | null>(initialAccount);
   const [qrLogin, setQrLogin] = useState<NeteaseQrStart | null>(null);
   const [qrStatus, setQrStatus] = useState("点击生成二维码后，用网易云音乐扫码登录。");
   const [showCookie, setShowCookie] = useState(false);
   const [saving, setSaving] = useState(false);
   const [qrLoading, setQrLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const qrSyncingRef = useRef(false);
+  const accountChangeRef = useRef(onAccountChange);
+  accountChangeRef.current = onAccountChange;
 
   useEffect(() => {
     let mounted = true;
@@ -660,7 +549,7 @@ export function AccountPanel({
       .getSettings()
       .then((settings) => {
         if (mounted) {
-          setAccount(settings.neteaseAccount);
+          setAccount((current) => (current?.connected ? current : settings.neteaseAccount));
         }
       })
       .catch(() => {
@@ -672,7 +561,11 @@ export function AccountPanel({
   }, []);
 
   useEffect(() => {
-    if (!qrLogin || account?.connected) return;
+    if (initialAccount?.connected) setAccount(initialAccount);
+  }, [initialAccount]);
+
+  useEffect(() => {
+    if (!qrLogin) return;
 
     let cancelled = false;
     const check = async () => {
@@ -682,10 +575,31 @@ export function AccountPanel({
 
         if (result.status === "success" && result.account) {
           setAccount(result.account);
-          onAccountChange?.(result.account);
-          setQrLogin(null);
-          setQrStatus("登录成功，账号信息已同步。");
+          accountChangeRef.current?.(result.account);
+          if (qrSyncingRef.current) return;
+          qrSyncingRef.current = true;
+          setQrStatus("登录已确认，正在同步账号信息...");
           setMessage("网易云账号已登录");
+          let attempts = 0;
+          const refreshAccount = () => {
+            attempts += 1;
+            void api.getSettings().then((settings) => {
+              if (settings.neteaseAccount.connected) {
+                setAccount(settings.neteaseAccount);
+                accountChangeRef.current?.(settings.neteaseAccount);
+                setQrLogin(null);
+                setQrStatus("登录成功，账号信息已同步。");
+                qrSyncingRef.current = false;
+                return;
+              }
+              if (attempts < 12 && !cancelled) window.setTimeout(refreshAccount, 500);
+              else qrSyncingRef.current = false;
+            }).catch(() => {
+              if (attempts < 12 && !cancelled) window.setTimeout(refreshAccount, 500);
+              else qrSyncingRef.current = false;
+            });
+          };
+          refreshAccount();
           return;
         }
 
@@ -706,11 +620,12 @@ export function AccountPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [account?.connected, onAccountChange, qrLogin]);
+  }, [qrLogin]);
 
   async function startQrLogin() {
     setQrLoading(true);
     setMessage(null);
+    qrSyncingRef.current = false;
     try {
       const result = await api.startNeteaseQrLogin();
       setQrLogin(result);
@@ -743,29 +658,16 @@ export function AccountPanel({
     }
   }
 
-  async function logout() {
-    setSaving(true);
-    setMessage(null);
-    try {
-      const result = await api.clearNeteaseCookie();
-      setAccount(result.account);
-      onAccountChange?.(result.account);
-      setCookie("");
-      setMessage("已退出登录");
-    } catch {
-      setMessage("退出失败，请稍后重试");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   return (
     <motion.div
-      initial={{ opacity: 0, y: -8, scale: 0.98, filter: "blur(12px)" }}
-      animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
-      exit={{ opacity: 0, y: -8, scale: 0.98, filter: "blur(12px)" }}
+      initial={{ opacity: 0, y: -8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.98 }}
       transition={{ duration: 0.22 }}
-      className="glass absolute right-0 top-14 z-50 w-[min(25rem,calc(100vw-2rem))] rounded-[1.4rem] p-4"
+      className={cn(
+        "glass z-50 w-[min(25rem,calc(100vw-2rem))] rounded-[1.4rem] p-4",
+        embedded ? "relative right-auto top-auto w-full shadow-none" : "absolute right-0 top-14",
+      )}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
@@ -812,18 +714,6 @@ export function AccountPanel({
         </div>
       </div>
 
-      {account?.connected && (
-        <button
-          type="button"
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-[1rem] bg-white/50 px-3 py-2 text-sm font-medium text-neutral-600 shadow-sm transition hover:bg-red-50 hover:text-red-600"
-          onClick={logout}
-          disabled={saving}
-        >
-          <LogOut className="size-4" />
-          退出登录
-        </button>
-      )}
-
       <button
         type="button"
         className="mt-3 flex w-full items-center justify-between rounded-[1rem] bg-white/50 px-3 py-2 text-left text-sm font-medium shadow-sm transition hover:bg-white/72"
@@ -864,6 +754,177 @@ export function AccountPanel({
         <Metric value={account?.userId ?? "--"} label="用户" />
         <Metric value={account?.connected ? "Ready" : "--"} label="同步" />
       </div>
+    </motion.div>
+  );
+}
+
+export function OnboardingDialog({
+  neteaseAccount,
+  hifiEnabled,
+  onHifiEnabledChange,
+  backgroundEnabled,
+  onBackgroundEnabledChange,
+  gaplessEnabled,
+  onGaplessEnabledChange,
+  onAddLocalMusic,
+  localMusicInfo,
+  scanProgress,
+  onAccountChange,
+  onComplete,
+}: {
+  neteaseAccount: NeteaseAccountSummary | null;
+  hifiEnabled: boolean;
+  onHifiEnabledChange: (value: boolean) => void;
+  backgroundEnabled: boolean;
+  onBackgroundEnabledChange: (value: boolean) => void;
+  gaplessEnabled: boolean;
+  onGaplessEnabledChange: (value: boolean) => void;
+  onAddLocalMusic: () => void;
+  localMusicInfo: { path: string; count: number } | null;
+  scanProgress: { phase: string; processed: number; total: number; status: string; error?: string | null } | null;
+  onAccountChange: (account: NeteaseAccountSummary) => void;
+  onComplete: () => void;
+}) {
+  const [step, setStep] = useState(0);
+
+  function finish() {
+    try {
+      window.localStorage.setItem("aria-onboarding-complete", "1");
+    } catch {
+      // The wizard should never block normal playback when storage is unavailable.
+    }
+    onComplete();
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-neutral-950/25 p-4 backdrop-blur-sm"
+    >
+      <motion.div
+        initial={{ opacity: 0, y: 16, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        className="max-h-[min(90vh,52rem)] w-full max-w-2xl overflow-y-auto rounded-[1.5rem] border border-white/80 bg-[#f7f8fa]/95 p-5 shadow-[0_30px_100px_rgba(20,24,35,0.24)] sm:p-7"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-neutral-400">Aria</p>
+            <h1 className="mt-1 text-2xl font-semibold">开始使用 Aria</h1>
+          </div>
+          <div className="flex items-center gap-1.5" aria-label={`第 ${step + 1} 步，共 4 步`}>
+            {[0, 1, 2, 3].map((item) => (
+              <span key={item} className={cn("size-2 rounded-full", item === step ? "bg-neutral-950" : "bg-neutral-300")} />
+            ))}
+          </div>
+        </div>
+
+        {step === 0 && (
+          <div className="mt-8 grid gap-5 sm:grid-cols-[1.1fr_0.9fr] sm:items-center">
+            <div>
+              <h2 className="text-3xl font-semibold leading-tight">你的音乐，<br />从这里开始。</h2>
+              <p className="mt-4 text-sm leading-6 text-neutral-500">Aria 把本地音乐、网易云歌单和高音质播放集中在一个安静的工作台里。</p>
+            </div>
+            <div className="rounded-[1.25rem] bg-neutral-950 p-5 text-white shadow-lg">
+              <p className="text-xs uppercase tracking-[0.2em] text-white/55">Ready when you are</p>
+              <div className="mt-5 space-y-3 text-sm text-white/80">
+                <p className="flex items-center gap-2"><CheckCircle2 className="size-4 text-[#9db2ff]" />网易云流媒体</p>
+                <p className="flex items-center gap-2"><CheckCircle2 className="size-4 text-[#9db2ff]" />本地无损音乐</p>
+                <p className="flex items-center gap-2"><CheckCircle2 className="size-4 text-[#9db2ff]" />任务栏快捷控制</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div className="mt-8">
+            <h2 className="text-xl font-semibold">添加你的本地音乐</h2>
+            <p className="mt-2 text-sm leading-6 text-neutral-500">选择一个音乐文件夹，Aria 会扫描歌曲、封面、码率和采样率。文件不会被复制或移动，扫描完成后可以在左侧“本地音乐”查看。</p>
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-[1.1rem] bg-white/70 p-4 shadow-sm"><p className="font-medium">选择文件夹</p><p className="mt-1 text-xs leading-5 text-neutral-500">支持 FLAC、ALAC、WAV、MP3 等常见格式。</p></div>
+              <div className="rounded-[1.1rem] bg-white/70 p-4 shadow-sm"><p className="font-medium">自动识别</p><p className="mt-1 text-xs leading-5 text-neutral-500">读取内嵌封面、艺术家、专辑和真实音频参数。</p></div>
+              <div className="rounded-[1.1rem] bg-white/70 p-4 shadow-sm"><p className="font-medium">随时管理</p><p className="mt-1 text-xs leading-5 text-neutral-500">设置中的本地音乐入口可以重新扫描或清除索引。</p></div>
+            </div>
+            {localMusicInfo && (
+              <div className="mt-5 grid gap-3 rounded-[1.1rem] border border-emerald-200/70 bg-emerald-50/70 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                <div className="min-w-0">
+                  <p className="text-xs font-medium uppercase tracking-[0.18em] text-emerald-700/70">已选择本地音乐</p>
+                  <p className="mt-1 truncate text-sm font-semibold text-emerald-950" title={localMusicInfo.path}>{localMusicInfo.path}</p>
+                </div>
+                <p className="text-lg font-semibold text-emerald-900">{localMusicInfo.count} 首</p>
+              </div>
+            )}
+            {scanProgress?.status === "running" && (
+              <div className="mt-4 rounded-[1rem] border border-sky-200/70 bg-sky-50/70 p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">正在扫描本地音乐</span>
+                  <span className="text-sky-700">{scanProgress.total ? String(scanProgress.processed) + "/" + String(scanProgress.total) : "准备中"}</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-sky-100">
+                  <div className="h-full rounded-full bg-sky-500 transition-[width] duration-200" style={{ width: (scanProgress.total ? Math.min(100, scanProgress.processed / scanProgress.total * 100) : 8) + "%" }} />
+                </div>
+              </div>
+            )}
+            <Button className="mt-5" onClick={onAddLocalMusic}><FolderSearch />{localMusicInfo ? "重新选择文件夹" : "选择本地音乐文件夹"}</Button>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="mt-5">
+            <h2 className="text-xl font-semibold">连接网易云音乐</h2>
+            <p className="mt-2 text-sm text-neutral-500">登录后可以同步每日推荐、私人漫游、歌单和真实音质信息。也可以稍后在右上角完成。</p>
+            {neteaseAccount?.connected && (
+              <p className="mt-3 flex items-center gap-2 text-sm font-medium text-emerald-700"><CheckCircle2 className="size-4" />已登录：{neteaseAccount.nickname ?? "网易云账号"}</p>
+            )}
+            <div className="mt-4 overflow-hidden rounded-[1.25rem] bg-white/55">
+              <AccountPanel
+                embedded
+                initialAccount={neteaseAccount}
+                onClose={() => undefined}
+                onAccountChange={onAccountChange}
+              />
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="mt-8">
+            <h2 className="text-xl font-semibold">设置你的播放偏好</h2>
+            <p className="mt-2 text-sm text-neutral-500">这些选项之后都可以在设置中修改。</p>
+            <div className="mt-5 space-y-3">
+              {[
+                ["后台托管", "关闭主窗口后继续播放，并保留任务栏与媒体快捷控制。", backgroundEnabled, onBackgroundEnabledChange],
+                ["HiFi 优先", "自动请求当前歌曲可用的最高音质。", hifiEnabled, onHifiEnabledChange],
+                ["无缝衔接", "提前加载下一首，减少歌曲切换时的空隙。", gaplessEnabled, onGaplessEnabledChange],
+              ].map(([label, description, enabled, onChange]) => (
+                <div key={String(label)} className="flex items-center justify-between gap-4 rounded-[1.1rem] bg-white/70 p-4 shadow-sm">
+                  <div><p className="font-medium">{String(label)}</p><p className="mt-1 text-xs leading-5 text-neutral-500">{String(description)}</p></div>
+                  <button
+                    className={cn("flex h-8 w-14 shrink-0 items-center rounded-full p-1 transition", enabled ? "bg-neutral-950" : "bg-neutral-200")}
+                    onClick={() => (onChange as (value: boolean) => void)(!enabled)}
+                    aria-label={`切换 ${String(label)}`}
+                    aria-pressed={Boolean(enabled)}
+                  >
+                    <span className={cn("size-6 rounded-full bg-white shadow-sm transition", enabled && "translate-x-6")} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {neteaseAccount?.connected && (
+              <p className="mt-4 flex items-center gap-2 text-sm text-neutral-600"><CheckCircle2 className="size-4 text-emerald-600" />已连接 {neteaseAccount.nickname ?? "网易云账号"}</p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-8 flex items-center justify-between gap-3">
+          <button className="text-sm text-neutral-500 transition hover:text-neutral-950" onClick={finish}>稍后设置</button>
+          <Button onClick={() => (step < 3 ? setStep((value) => value + 1) : finish())}>
+            {step < 3 ? "继续" : "完成"}
+            {step < 3 ? <ArrowRight /> : <CheckCircle2 />}
+          </Button>
+        </div>
+      </motion.div>
     </motion.div>
   );
 }

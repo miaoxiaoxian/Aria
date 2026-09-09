@@ -1,4 +1,4 @@
-import type { LyricCandidate } from "@/data/music";
+import type { LyricCandidate, LyricLine } from "@/data/music";
 
 declare global {
   interface Window {
@@ -20,6 +20,7 @@ declare global {
           exclusive: boolean;
           deviceId: string;
           bitrate: number | null;
+          gaplessGeneration?: number;
           kind?: string;
         }>;
         load?: (payload: {
@@ -35,6 +36,7 @@ declare global {
           endChapter?: string | null;
           cdReadQuality?: "high" | "low";
         }) => Promise<unknown>;
+        loadNext?: (payload: { trackId: string; url: string }) => Promise<unknown>;
         setPaused?: (paused: boolean) => Promise<unknown>;
         seek?: (position: number) => Promise<unknown>;
         setVolume?: (volume: number) => Promise<unknown>;
@@ -57,6 +59,7 @@ declare global {
           exclusive: boolean;
           deviceId: string;
           bitrate: number | null;
+          gaplessGeneration?: number;
           kind?: string;
         }) => void) => () => void;
       };
@@ -70,13 +73,14 @@ declare global {
       showApp?: () => void;
       quitApp?: () => void;
       setBackgroundEnabled?: (enabled: boolean) => void;
-      setGlobalArrowKeys?: (enabled: boolean) => void;
-      diagnostics?: {
-        getStats?: () => Promise<DiagnosticsStats | null>;
-        exportLogs?: (payload?: unknown) => Promise<{ ok: boolean; path?: string; copiedLogs?: number; error?: string }>;
-        setGpuOptimize?: (enabled: boolean) => Promise<boolean>;
-      };
+      chooseMusicFolder?: () => Promise<string | null>;
       updateTaskbarPlayback?: (payload: { title?: string; artist?: string; playing?: boolean }) => Promise<boolean>;
+      setTaskbarPreviewRect?: (rect: { x: number; y: number; width: number; height: number } | null) => Promise<boolean>;
+      setTaskbarIconicThumb?: (pixels: Uint8ClampedArray, width: number, height: number) => Promise<boolean>;
+      setTaskbarIconicLive?: (pixels: Uint8ClampedArray, width: number, height: number) => Promise<boolean>;
+      clearTaskbarIconicThumb?: () => Promise<boolean>;
+      getTaskbarIconicStats?: () => Promise<Record<string, number | boolean> | null>;
+      configureGlobalShortcuts?: (payload: Record<"toggle" | "previous" | "next" | "show", string>) => Promise<unknown>;
       copyImageToClipboard?: (payload: { url?: string; dataUrl?: string }) => Promise<boolean>;
       log?: (payload: {
         level?: "debug" | "info" | "warn" | "error";
@@ -154,51 +158,6 @@ export type NeteaseQrCheck = {
   status: "waiting" | "scanned" | "expired" | "success";
   message: string;
   account: NeteaseAccountSummary | null;
-};
-
-export type DiagnosticsProcess = {
-  type: string;
-  pid: number;
-  cpuPercent: number;
-  memoryMb: number;
-};
-
-export type DiagnosticsStats = {
-  generatedAt: string;
-  appVersion: string;
-  electronVersion: string;
-  nodeVersion: string;
-  platform: string;
-  arch: string;
-  cpuModel: string | null;
-  cpuCores: number;
-  pid: number;
-  uptimeSeconds: number;
-  mainMemoryMb: number;
-  backendPid: number | null;
-  backendMemoryMb: number | null;
-  gpuVendorId: number | null;
-  gpuOptimizeEnabled: boolean;
-  gpuFeatures: {
-    gpuCompositing: string;
-    rasterization: string;
-    webgl: string;
-    canvas2d: string;
-    videoDecode: string;
-  } | null;
-  processes: DiagnosticsProcess[];
-  runtime: Record<string, unknown> | null;
-};
-
-export type RuntimeInfo = {
-  view: string;
-  outputMode: string;
-  nativePlayback: boolean;
-  playing: boolean;
-  queueLength: number;
-  trackCount: number;
-  perfMode?: boolean;
-  audioContextState?: string;
 };
 
 export type ProviderTrack = {
@@ -286,6 +245,24 @@ export const api = {
       body: JSON.stringify({ folderPath, persist }),
     });
   },
+  startLibraryScan(folderPath: string, persist = true) {
+    return request<{ jobId: string }>("/api/library/scan/start", {
+      method: "POST",
+      body: JSON.stringify({ folderPath, persist }),
+    });
+  },
+  getLibraryScanProgress(jobId: string) {
+    return request<{
+      status: "running" | "complete" | "error";
+      phase: "discovering" | "metadata" | "saving" | "complete";
+      processed: number;
+      total: number;
+      folderPath: string;
+      error: string | null;
+      tracks?: ApiScannedTrack[];
+      library?: ApiLibraryIndex | null;
+    }>(`/api/library/scan/progress/${encodeURIComponent(jobId)}`);
+  },
   scanCdDrives(persist = true, qualityMode: "high" | "low" = "high") {
     return request<{
       tracks: ApiScannedTrack[];
@@ -333,7 +310,7 @@ export const api = {
     return request<{
       ok: boolean;
       lyricBindings: Record<string, string>;
-      lyrics: Array<{ time: string; text: string }>;
+      lyrics: LyricLine[];
     }>("/api/lyrics/bind", {
       method: "POST",
       body: JSON.stringify({ trackId, candidateId }),
@@ -350,11 +327,6 @@ export const api = {
     return request<{ ok: boolean; account: NeteaseAccountSummary }>("/api/settings/netease-cookie", {
       method: "POST",
       body: JSON.stringify({ cookie }),
-    });
-  },
-  clearNeteaseCookie() {
-    return request<{ ok: boolean; account: NeteaseAccountSummary }>("/api/settings/netease-cookie", {
-      method: "DELETE",
     });
   },
   startNeteaseQrLogin() {
@@ -421,7 +393,7 @@ export const api = {
     return request<{ tracks: ProviderTrack[] }>(`/api/providers/netease/artists/${encodeURIComponent(artistId)}/tracks`);
   },
   getNeteaseLyrics(trackId: string) {
-    return request<{ lyrics: Array<{ time: string; text: string }> }>(
+    return request<{ lyrics: LyricLine[] }>(
       `/api/providers/netease/tracks/${encodeURIComponent(trackId)}/lyrics`,
     );
   },
