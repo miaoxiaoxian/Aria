@@ -132,6 +132,16 @@ if (!gotLock) {
   app.quit();
 }
 
+function mediaCommandFromArgv(argv) {
+  if (!Array.isArray(argv)) return null;
+  if (argv.includes("--media-toggle")) return "toggle";
+  if (argv.includes("--media-previous")) return "previous";
+  if (argv.includes("--media-next")) return "next";
+  return null;
+}
+
+let initialMediaCommand = mediaCommandFromArgv(process.argv);
+
 app.setName("Aria");
 app.setAppUserModelId("com.yrrlyb.aria");
 Menu.setApplicationMenu(null);
@@ -671,6 +681,15 @@ async function createWindow() {
   } else {
     await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   }
+
+  if (initialMediaCommand) {
+    const pendingCommand = initialMediaCommand;
+    initialMediaCommand = null;
+    setTimeout(() => {
+      sendPlaybackCommand(pendingCommand);
+      writeLog("desktop.log", `launch media command: ${pendingCommand}`);
+    }, 1800);
+  }
 }
 
 ipcMain.handle("aria:minimize-to-tray", () => {
@@ -1001,7 +1020,11 @@ ipcMain.handle("aria:native-audio:stop", async () => {
   return getNativeAudioEngine().stop();
 });
 
-app.on("second-instance", showWindow);
+app.on("second-instance", (_event, argv) => {
+  showWindow();
+  const command = mediaCommandFromArgv(argv);
+  if (command) sendPlaybackCommand(command);
+});
 
 app.whenReady().then(async () => {
   gpuVendorId = await detectGpuVendorAsync();
@@ -1020,6 +1043,47 @@ app.whenReady().then(async () => {
   attachPowerRecoveryHandlers();
   await createWindow();
   syncGlobalShortcuts(globalShortcutConfig);
+
+  try {
+    app.setJumpList([
+      {
+        type: "custom",
+        name: "播放控制",
+        items: [
+          {
+            type: "task",
+            title: "播放 / 暂停",
+            description: "播放或暂停当前歌曲",
+            program: process.execPath,
+            args: "--media-toggle",
+            iconPath: process.execPath,
+            iconIndex: 0,
+          },
+          {
+            type: "task",
+            title: "上一首",
+            description: "切换到上一首",
+            program: process.execPath,
+            args: "--media-previous",
+            iconPath: process.execPath,
+            iconIndex: 0,
+          },
+          {
+            type: "task",
+            title: "下一首",
+            description: "切换到下一首",
+            program: process.execPath,
+            args: "--media-next",
+            iconPath: process.execPath,
+            iconIndex: 0,
+          },
+        ],
+      },
+    ]);
+    writeLog("desktop.log", "jump list installed (播放控制)");
+  } catch (error) {
+    writeLog("desktop.log", `jump list failed: ${error?.stack || error}`);
+  }
 });
 
 app.on("activate", () => {
