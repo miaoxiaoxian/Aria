@@ -62,6 +62,15 @@ const panelVariants = {
   exit: { opacity: 0, y: -16 },
 };
 
+function parseClockDuration(value: string) {
+  const clean = String(value ?? "").replace(/[[\]]/g, "").trim();
+  const parts = clean.split(":").map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return 0;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0] || 0;
+}
+
 export default function App() {
   const [initialPlayerCache] = useState(readCachedPlayerState);
   const [cachedActiveTrackSnapshot] = useState(() => initialPlayerCache.activeTrackSnapshot);
@@ -127,6 +136,7 @@ export default function App() {
     }
   });
   const [keyboardShortcuts, setKeyboardShortcuts] = useState<KeyboardShortcuts>(readKeyboardShortcuts);
+  const [artworkFallback, setArtworkFallback] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
@@ -782,14 +792,56 @@ export default function App() {
       mediaSession.playbackState = "none";
       return;
     }
+    const artwork = [
+      ...(artworkFallback ? [{ src: artworkFallback, sizes: "256x256", type: "image/jpeg" as const }] : []),
+      ...(activeTrack.coverUrl
+        ? [{ src: activeTrack.coverUrl, sizes: "512x512", type: "image/jpeg" as const }]
+        : []),
+    ];
     mediaSession.metadata = new MediaMetadata({
       title: activeTrack.title,
       artist: activeTrack.artist,
       album: activeTrack.album,
-      artwork: activeTrack.coverUrl ? [{ src: activeTrack.coverUrl, sizes: "512x512" }] : [],
+      artwork,
     });
     mediaSession.playbackState = playing ? "playing" : "paused";
-  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, hasActiveTrack, playing]);
+  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, artworkFallback, hasActiveTrack, playing]);
+
+  // SMTC artwork frequently rejects http://127.0.0.1 images; provide a
+  // data-URL copy of the cover so the system media card can show artwork.
+  useEffect(() => {
+    let cancelled = false;
+    setArtworkFallback(null);
+    const url = activeTrack.coverUrl;
+    if (!url) return;
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      if (cancelled) return;
+      try {
+        const canvas = document.createElement("canvas");
+        const size = 256;
+        canvas.width = size;
+        canvas.height = size;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        context.fillStyle = activeTrack.accent || "#7b8494";
+        context.fillRect(0, 0, size, size);
+        const source = Math.min(image.naturalWidth || size, image.naturalHeight || size, size);
+        const sx = ((image.naturalWidth || size) - source) / 2;
+        const sy = ((image.naturalHeight || size) - source) / 2;
+        context.drawImage(image, sx, sy, source, source, 0, 0, size, size);
+        setArtworkFallback(canvas.toDataURL("image/jpeg", 0.86));
+      } catch {
+        // Artwork is best-effort for the OS media card.
+      }
+    };
+    image.onerror = () => undefined;
+    image.src = url;
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTrack.accent, activeTrack.coverUrl]);
 
   useEffect(() => {
     const mediaSession = navigator.mediaSession;
@@ -824,6 +876,20 @@ export default function App() {
       }
     };
   }, [handlePlaybackCommand, seekToFromMediaKey]);
+
+  // Provide a position state so the OS enables seek/next/previous reliably.
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession || !hasActiveTrack) return;
+    try {
+      const total = durationSeconds > 0 ? durationSeconds : parseClockDuration(activeTrack.duration);
+      if (total > 0) {
+        mediaSession.setPositionState({ duration: total, playbackRate: 1, position: 0 });
+      }
+    } catch {
+      // Position state is optional; playback still works without it.
+    }
+  }, [activeTrack.duration, activeTrack.id, durationSeconds, hasActiveTrack]);
 
   // The non-native fallback thumbnail clips to the visible artwork. Prefer
   // the exact current view so an exiting animation cannot leave a stale clip
