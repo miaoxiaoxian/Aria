@@ -85,6 +85,7 @@ declare global {
       setTaskbarIconicLive?: (pixels: Uint8ClampedArray, width: number, height: number) => Promise<boolean>;
       clearTaskbarIconicThumb?: () => Promise<boolean>;
       getTaskbarIconicStats?: () => Promise<Record<string, number | boolean> | null>;
+      saveMediaArtwork?: (dataUrl: string) => Promise<{ url: string; bytes: number } | null>;
       configureGlobalShortcuts?: (payload: Record<"toggle" | "previous" | "next" | "show", string>) => Promise<unknown>;
       copyImageToClipboard?: (payload: { url?: string; dataUrl?: string }) => Promise<boolean>;
       log?: (payload: {

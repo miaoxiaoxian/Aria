@@ -137,6 +137,7 @@ export default function App() {
   });
   const [keyboardShortcuts, setKeyboardShortcuts] = useState<KeyboardShortcuts>(readKeyboardShortcuts);
   const [artworkFallback, setArtworkFallback] = useState<string | null>(null);
+  const [artworkFileUrl, setArtworkFileUrl] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
@@ -793,6 +794,7 @@ export default function App() {
       return;
     }
     const artwork = [
+      ...(artworkFileUrl ? [{ src: artworkFileUrl, sizes: "256x256", type: "image/jpeg" as const }] : []),
       ...(artworkFallback ? [{ src: artworkFallback, sizes: "256x256", type: "image/jpeg" as const }] : []),
       ...(activeTrack.coverUrl
         ? [{ src: activeTrack.coverUrl, sizes: "512x512", type: "image/jpeg" as const }]
@@ -805,13 +807,15 @@ export default function App() {
       artwork,
     });
     mediaSession.playbackState = playing ? "playing" : "paused";
-  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, artworkFallback, hasActiveTrack, playing]);
+  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, artworkFallback, artworkFileUrl, hasActiveTrack, playing]);
 
-  // SMTC artwork frequently rejects http://127.0.0.1 images; provide a
-  // data-URL copy of the cover so the system media card can show artwork.
+  // SMTC artwork frequently rejects http://127.0.0.1 images; produce a square
+  // JPEG from the cover and hand Windows a real file:// URL (the only form the
+  // system media card reliably accepts), keeping a data-URL copy as a backup.
   useEffect(() => {
     let cancelled = false;
     setArtworkFallback(null);
+    setArtworkFileUrl(null);
     const url = activeTrack.coverUrl;
     if (!url) return;
     const image = new Image();
@@ -831,7 +835,16 @@ export default function App() {
         const sx = ((image.naturalWidth || size) - source) / 2;
         const sy = ((image.naturalHeight || size) - source) / 2;
         context.drawImage(image, sx, sy, source, source, 0, 0, size, size);
-        setArtworkFallback(canvas.toDataURL("image/jpeg", 0.86));
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.86);
+        setArtworkFallback(dataUrl);
+        const save = window.ariaDesktop?.saveMediaArtwork;
+        if (save) {
+          save(dataUrl)
+            .then((result) => {
+              if (!cancelled && result?.url) setArtworkFileUrl(result.url);
+            })
+            .catch(() => undefined);
+        }
       } catch {
         // Artwork is best-effort for the OS media card.
       }
@@ -875,7 +888,7 @@ export default function App() {
         }
       }
     };
-  }, [handlePlaybackCommand, seekToFromMediaKey]);
+  }, [handlePlaybackCommand, hasActiveTrack, activeTrack.id, seekToFromMediaKey]);
 
   // Provide a position state so the OS enables seek/next/previous reliably.
   useEffect(() => {

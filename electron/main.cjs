@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
+const { pathToFileURL } = require("node:url");
 const { createLogger, serializeError } = require("./logger.cjs");
 const { MpvAudioEngine } = require("./mpvEngine.cjs");
 
@@ -232,6 +233,12 @@ function resolvePreload() {
 }
 
 function resolveIcon() {
+  if (app.isPackaged) {
+    // Prefer the real filesystem copy shipped via extraResources; Explorer and
+    // Win32 icon APIs handle a loose file more reliably than an asar entry.
+    const external = path.join(process.resourcesPath, "icon.ico");
+    if (fs.existsSync(external)) return external;
+  }
   return path.join(__dirname, "..", "build", "icon.ico");
 }
 
@@ -592,8 +599,24 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: true,
+      // Media playback starts from the renderer without a user gesture when a
+      // queue auto-plays; without this the OS media session can stay paused.
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
+  // Re-assert the window icon explicitly. A missing or stale taskbar icon is
+  // almost always Explorer failing to resolve the button icon, and forcing
+  // WM_SETICON after creation makes the running window's identity explicit.
+  try {
+    const windowIcon = nativeImage.createFromPath(resolveIcon());
+    if (!windowIcon.isEmpty()) {
+      mainWindow.setIcon(windowIcon);
+    } else {
+      writeLog("desktop.log", "window icon resource resolved empty");
+    }
+  } catch (error) {
+    writeLog("desktop.log", `window icon apply failed: ${error?.message || error}`);
+  }
   mainWindow.removeMenu();
   mainWindow.setMenuBarVisibility(false);
   if (process.platform === "win32" && typeof mainWindow.setAppDetails === "function") {
@@ -878,6 +901,31 @@ ipcMain.handle("aria:update-taskbar-playback", (_event, payload) => {
   };
   syncTaskbarPlayback();
   return true;
+});
+
+// The Windows SMTC media card needs artwork as a real file: Chromium hands the
+// OS a path/thumbnail, and data:/loopback URLs are frequently dropped. The
+// renderer paints a 256x256 square JPEG and hands it over as a data URL; we
+// persist it under userData and return a file:// URL for MediaMetadata.
+ipcMain.handle("aria:save-media-artwork", (_event, dataUrl) => {
+  try {
+    if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:image/")) return null;
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) return null;
+    const payload = dataUrl.slice(comma + 1);
+    if (!payload || payload.length > 6_000_000) return null;
+    const buffer = Buffer.from(payload, "base64");
+    if (!buffer.length) return null;
+
+    const artworkDir = path.join(app.getPath("userData"), "artwork");
+    fs.mkdirSync(artworkDir, { recursive: true });
+    const target = path.join(artworkDir, "media-cover.jpg");
+    fs.writeFileSync(target, buffer);
+    return { url: pathToFileURL(target).href, bytes: buffer.length };
+  } catch (error) {
+    writeLog("desktop.log", `save media artwork failed: ${error?.message || error}`);
+    return null;
+  }
 });
 
 ipcMain.handle("aria:configure-global-shortcuts", (_event, payload) => {
