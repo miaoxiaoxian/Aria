@@ -537,9 +537,6 @@ export function SettingsPanel({
               </div>
               <Zap className="size-5 text-neutral-400" />
             </div>
-            <p className="mt-2 text-xs leading-5 text-neutral-500">
-              界面卡顿或 CPU 占用偏高时，直接在这里调整，无需展开诊断日志。
-            </p>
             <div className="mt-3 grid gap-2 lg:grid-cols-2">
               {onPerfModeChange && (
                 <div className="flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2.5">
