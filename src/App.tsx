@@ -45,7 +45,7 @@ import {
   type PlayerSideView,
   type QualityLevel,
 } from "@/lib/playerPresentation";
-import { commitPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
+import { commitPlaybackTime, getPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
 import { materializeQueueIds, mergeQueueTrackSources, orderedQueueIds, playableTracks } from "@/lib/playQueue";
 import { matchesShortcut, readKeyboardShortcuts, writeKeyboardShortcuts, type KeyboardShortcuts } from "@/lib/keyboardShortcuts";
 import { sourceLabel } from "@/lib/trackLabels";
@@ -137,7 +137,6 @@ export default function App() {
   });
   const [keyboardShortcuts, setKeyboardShortcuts] = useState<KeyboardShortcuts>(readKeyboardShortcuts);
   const [artworkFallback, setArtworkFallback] = useState<string | null>(null);
-  const [artworkFileUrl, setArtworkFileUrl] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
@@ -783,7 +782,69 @@ export default function App() {
 
   const seekToFromMediaKey = useEffectEvent((time: number) => seekTo(time));
 
-  // Publish playback to the OS media overlay / lock screen (Windows SMTC).
+  // --- Windows SMTC / OS media session publishing ---------------------------
+  // Order matters: Chromium enables the OS next/previous buttons and the
+  // artwork slot from the actions + metadata that are present when the session
+  // becomes active, so actions are registered before each metadata update.
+
+  // 1) Media session actions (play/pause/next/previous/seek). Registered while
+  // a track is active; unregistered when playback returns to the idle state.
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession) return;
+    if (!hasActiveTrack) {
+      return;
+    }
+    const log = window.ariaDesktop?.log;
+    const reportAction = (action: string) => {
+      log?.({
+        level: "info",
+        source: "smtc.action",
+        message: `OS media action: ${action}`,
+        context: { ...rendererDiagnosticRef.current },
+      }).catch(() => undefined);
+    };
+    const handlers: Array<[MediaSessionAction, ((details: MediaSessionActionDetails) => void) | null]> = [
+      ["play", () => { reportAction("play"); handlePlaybackCommand("toggle"); }],
+      ["pause", () => { reportAction("pause"); handlePlaybackCommand("toggle"); }],
+      ["previoustrack", () => { reportAction("previous"); handlePlaybackCommand("previous"); }],
+      ["nexttrack", () => { reportAction("next"); handlePlaybackCommand("next"); }],
+      [
+        "seekto",
+        (details) => {
+          reportAction(`seekto:${details.seekTime}`);
+          if (typeof details.seekTime === "number") seekToFromMediaKey(details.seekTime);
+        },
+      ],
+    ];
+    for (const [action, handler] of handlers) {
+      try {
+        mediaSession.setActionHandler(action, handler);
+      } catch (error) {
+        log?.({
+          level: "warn",
+          source: "smtc.action",
+          message: `setActionHandler failed for ${action}`,
+          context: { ...rendererDiagnosticRef.current, error: error instanceof Error ? error.message : String(error) },
+        }).catch(() => undefined);
+      }
+    }
+    return () => {
+      for (const [action] of handlers) {
+        try {
+          mediaSession.setActionHandler(action, null);
+        } catch {
+          // Optional per platform.
+        }
+      }
+    };
+  }, [handlePlaybackCommand, hasActiveTrack, seekToFromMediaKey]);
+
+  // 2) Metadata. Chromium only accepts http/https/data/blob artwork URLs
+  // (file:// is rejected with a console warning). Offer the original remote
+  // CDN URL first when it can be recovered from the proxied cover address,
+  // then the proxied loopback URL, then a data-URL twin painted from the
+  // cover (added asynchronously below; publishing re-runs when it arrives).
   useEffect(() => {
     const mediaSession = navigator.mediaSession;
     if (!mediaSession) return;
@@ -793,13 +854,26 @@ export default function App() {
       mediaSession.playbackState = "none";
       return;
     }
-    const artwork = [
-      ...(artworkFileUrl ? [{ src: artworkFileUrl, sizes: "256x256", type: "image/jpeg" as const }] : []),
-      ...(artworkFallback ? [{ src: artworkFallback, sizes: "256x256", type: "image/jpeg" as const }] : []),
-      ...(activeTrack.coverUrl
-        ? [{ src: activeTrack.coverUrl, sizes: "512x512", type: "image/jpeg" as const }]
-        : []),
-    ];
+    const artwork: Array<{ src: string; sizes: string; type: string }> = [];
+    const pushArtwork = (src: string | null | undefined, sizes: string) => {
+      if (!src || !/^(https?|data|blob):/i.test(src)) return;
+      if (artwork.some((entry) => entry.src === src)) return;
+      artwork.push({ src, sizes, type: "image/jpeg" });
+    };
+    // The proxied cover is usually /api/providers/netease/cover?url=<CDN>.
+    // Recover the original public URL — Chromium's Windows SMTC artwork
+    // downloader is most reliable against a public http(s) address.
+    if (activeTrack.coverUrl) {
+      try {
+        const candidate = new URL(activeTrack.coverUrl, window.location.href).searchParams.get("url");
+        if (candidate && /^https?:/i.test(candidate)) pushArtwork(candidate, "512x512");
+      } catch {
+        // Fall through to the proxied URL.
+      }
+    }
+    pushArtwork(activeTrack.coverUrl, "512x512");
+    pushArtwork(artworkFallback, "256x256");
+
     mediaSession.metadata = new MediaMetadata({
       title: activeTrack.title,
       artist: activeTrack.artist,
@@ -807,15 +881,59 @@ export default function App() {
       artwork,
     });
     mediaSession.playbackState = playing ? "playing" : "paused";
-  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, artworkFallback, artworkFileUrl, hasActiveTrack, playing]);
+    try {
+      const total = durationSeconds > 0 ? durationSeconds : parseClockDuration(activeTrack.duration);
+      if (total > 0) {
+        mediaSession.setPositionState({ duration: total, playbackRate: 1, position: 0 });
+      }
+    } catch {
+      // Position state is optional; playback still works without it.
+    }
+    window.ariaDesktop?.log?.({
+      level: "info",
+      source: "smtc.metadata",
+      message: "media session metadata published",
+      context: {
+        ...rendererDiagnosticRef.current,
+        trackId: activeTrack.id,
+        title: activeTrack.title,
+        playing,
+        hasPosition: durationSeconds > 0,
+        artwork: artwork.map((entry) => ({
+          scheme: entry.src.slice(0, entry.src.indexOf(":")),
+          sizes: entry.sizes,
+          bytes: entry.src.length,
+        })),
+      },
+    }).catch(() => undefined);
+  }, [activeTrack.album, activeTrack.artist, activeTrack.coverUrl, activeTrack.id, activeTrack.title, artworkFallback, durationSeconds, hasActiveTrack, playing]);
 
-  // SMTC artwork frequently rejects http://127.0.0.1 images; produce a square
-  // JPEG from the cover and hand Windows a real file:// URL (the only form the
-  // system media card reliably accepts), keeping a data-URL copy as a backup.
+  // 3) Keep the OS seek bar / position state moving with playback so Windows
+  // treats the session as fully controllable.
+  useEffect(() => {
+    const mediaSession = navigator.mediaSession;
+    if (!mediaSession || !hasActiveTrack || !playing) return;
+    const total = durationSeconds > 0 ? durationSeconds : parseClockDuration(activeTrack.duration);
+    if (!(total > 0)) return;
+    const publish = () => {
+      try {
+        const position = Math.max(0, Math.min(total, getPlaybackTime()));
+        mediaSession.setPositionState({ duration: total, playbackRate: 1, position });
+      } catch {
+        // Optional; ignore transient failures.
+      }
+    };
+    publish();
+    const timer = window.setInterval(publish, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeTrack.duration, activeTrack.id, durationSeconds, hasActiveTrack, playing]);
+
+  // Produce a square data-URL copy of the cover as a second artwork source
+  // that needs no network fetch. The metadata effect above re-runs once this
+  // state lands, so the OS card update follows immediately.
   useEffect(() => {
     let cancelled = false;
     setArtworkFallback(null);
-    setArtworkFileUrl(null);
     const url = activeTrack.coverUrl;
     if (!url) return;
     const image = new Image();
@@ -835,74 +953,30 @@ export default function App() {
         const sx = ((image.naturalWidth || size) - source) / 2;
         const sy = ((image.naturalHeight || size) - source) / 2;
         context.drawImage(image, sx, sy, source, source, 0, 0, size, size);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.86);
-        setArtworkFallback(dataUrl);
-        const save = window.ariaDesktop?.saveMediaArtwork;
-        if (save) {
-          save(dataUrl)
-            .then((result) => {
-              if (!cancelled && result?.url) setArtworkFileUrl(result.url);
-            })
-            .catch(() => undefined);
-        }
-      } catch {
-        // Artwork is best-effort for the OS media card.
+        setArtworkFallback(canvas.toDataURL("image/jpeg", 0.86));
+      } catch (error) {
+        window.ariaDesktop?.log?.({
+          level: "warn",
+          source: "smtc.artwork",
+          message: "cover data-URL generation failed",
+          context: { ...rendererDiagnosticRef.current, error: error instanceof Error ? error.message : String(error) },
+        }).catch(() => undefined);
       }
     };
-    image.onerror = () => undefined;
+    image.onerror = () => {
+      if (cancelled) return;
+      window.ariaDesktop?.log?.({
+        level: "warn",
+        source: "smtc.artwork",
+        message: "cover image failed to load for data-URL fallback",
+        context: { ...rendererDiagnosticRef.current, url },
+      }).catch(() => undefined);
+    };
     image.src = url;
     return () => {
       cancelled = true;
     };
   }, [activeTrack.accent, activeTrack.coverUrl]);
-
-  useEffect(() => {
-    const mediaSession = navigator.mediaSession;
-    if (!mediaSession) return;
-
-    const handlers: Array<[MediaSessionAction, ((details: MediaSessionActionDetails) => void) | null]> = [
-      ["play", () => handlePlaybackCommand("toggle")],
-      ["pause", () => handlePlaybackCommand("toggle")],
-      ["previoustrack", () => handlePlaybackCommand("previous")],
-      ["nexttrack", () => handlePlaybackCommand("next")],
-      [
-        "seekto",
-        (details) => {
-          if (typeof details.seekTime === "number") seekToFromMediaKey(details.seekTime);
-        },
-      ],
-    ];
-    for (const [action, handler] of handlers) {
-      try {
-        mediaSession.setActionHandler(action, handler);
-      } catch {
-        // Individual session actions are optional per platform.
-      }
-    }
-    return () => {
-      for (const [action] of handlers) {
-        try {
-          mediaSession.setActionHandler(action, null);
-        } catch {
-          // Optional per platform.
-        }
-      }
-    };
-  }, [handlePlaybackCommand, hasActiveTrack, activeTrack.id, seekToFromMediaKey]);
-
-  // Provide a position state so the OS enables seek/next/previous reliably.
-  useEffect(() => {
-    const mediaSession = navigator.mediaSession;
-    if (!mediaSession || !hasActiveTrack) return;
-    try {
-      const total = durationSeconds > 0 ? durationSeconds : parseClockDuration(activeTrack.duration);
-      if (total > 0) {
-        mediaSession.setPositionState({ duration: total, playbackRate: 1, position: 0 });
-      }
-    } catch {
-      // Position state is optional; playback still works without it.
-    }
-  }, [activeTrack.duration, activeTrack.id, durationSeconds, hasActiveTrack]);
 
   // The non-native fallback thumbnail clips to the visible artwork. Prefer
   // the exact current view so an exiting animation cannot leave a stale clip
