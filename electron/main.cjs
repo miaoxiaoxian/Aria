@@ -50,8 +50,6 @@ let lastTaskbarClipLogKey = "";
 // use device-independent/CSS pixels. setThumbarButtons drops an existing
 // clip, so it is re-applied after every thumbar update.
 let taskbarClipRect = null;
-let globalArrowKeysEnabled = true;
-let globalArrowKeysRegistered = false;
 let gpuVendorId = null;
 let gpuDetectPromise = null;
 let gpuOptimizeEnabled = true;
@@ -363,10 +361,6 @@ function syncGlobalShortcuts(payload = {}) {
     if (success) usedAccelerators.add(accelerator.toLowerCase());
     else writeLog("desktop.log", `global shortcut unavailable: ${command}=${accelerator}`);
   }
-  // The unregisterAll() above also drops the background Left/Right track-change
-  // keys, so re-establish them according to the current window state instead of
-  // tearing the two shortcut systems apart.
-  syncGlobalArrowKeys();
   return { shortcuts: globalShortcutConfig, registered };
 }
 
@@ -542,31 +536,6 @@ function scheduleTaskbarSync(reason) {
   }
 }
 
-function registerGlobalArrowKeys() {
-  if (!globalArrowKeysEnabled || globalArrowKeysRegistered) return;
-  const leftOk = globalShortcut.register("Left", () => sendPlaybackCommand("previous"));
-  const rightOk = globalShortcut.register("Right", () => sendPlaybackCommand("next"));
-  globalArrowKeysRegistered = leftOk && rightOk;
-  if (!globalArrowKeysRegistered) {
-    writeLog("desktop.log", `global arrow keys registration failed: left=${leftOk} right=${rightOk}`);
-  }
-}
-
-function unregisterGlobalArrowKeys() {
-  if (!globalArrowKeysRegistered) return;
-  globalShortcut.unregister("Left");
-  globalShortcut.unregister("Right");
-  globalArrowKeysRegistered = false;
-}
-
-function syncGlobalArrowKeys() {
-  if (globalArrowKeysEnabled && (!mainWindow || !mainWindow.isFocused() || !mainWindow.isVisible())) {
-    registerGlobalArrowKeys();
-  } else {
-    unregisterGlobalArrowKeys();
-  }
-}
-
 function createTray() {
   if (tray) return;
   tray = new Tray(trayIcon());
@@ -678,24 +647,18 @@ async function createWindow() {
   });
   mainWindow.on("hide", () => {
     sendWindowVisibility(false);
-    syncGlobalArrowKeys();
   });
   mainWindow.on("minimize", () => {
     sendWindowVisibility(false);
-    syncGlobalArrowKeys();
   });
   mainWindow.on("show", () => {
     sendWindowVisibility(true);
     scheduleTaskbarSync("show");
-    syncGlobalArrowKeys();
   });
   mainWindow.on("restore", () => {
     sendWindowVisibility(true);
     scheduleTaskbarSync("restore");
-    syncGlobalArrowKeys();
   });
-  mainWindow.on("focus", () => syncGlobalArrowKeys());
-  mainWindow.on("blur", () => syncGlobalArrowKeys());
   mainWindow.on("closed", () => {
     for (const timer of taskbarRetryTimers) clearTimeout(timer);
     taskbarRetryTimers.clear();
@@ -749,12 +712,6 @@ ipcMain.handle("aria:quit", () => {
 ipcMain.handle("aria:set-background-enabled", (_event, enabled) => {
   backgroundEnabled = Boolean(enabled);
   return backgroundEnabled;
-});
-
-ipcMain.handle("aria:set-global-arrow-keys", (_event, enabled) => {
-  globalArrowKeysEnabled = Boolean(enabled);
-  syncGlobalArrowKeys();
-  return globalArrowKeysEnabled;
 });
 
 ipcMain.handle("aria:set-gpu-optimize", (_event, enabled) => {

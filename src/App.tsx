@@ -101,7 +101,7 @@ export default function App() {
     status: string;
     error?: string | null;
   } | null>(null);
-  const [settingsReturnView, setSettingsReturnView] = useState<ViewId>("home");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [immersiveOpen, setImmersiveOpen] = useState(false);
   const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
   const [backgroundEnabled, setBackgroundEnabled] = useState(() => {
@@ -116,13 +116,6 @@ export default function App() {
       return window.localStorage.getItem("aria-perf-mode") === "true";
     } catch {
       return false;
-    }
-  });
-  const [globalArrowKeysEnabled, setGlobalArrowKeysEnabled] = useState(() => {
-    try {
-      return window.localStorage.getItem("aria-global-arrow-keys") !== "false";
-    } catch {
-      return true;
     }
   });
   const [playerSideView, setPlayerSideView] = useState<PlayerSideView>(initialPlayerCache.playerSideView ?? "lyrics");
@@ -1085,12 +1078,12 @@ export default function App() {
         handlePlaybackCommand("toggle");
         return;
       }
-      if (event.key === "MediaTrackNext" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight") || (globalArrowKeysEnabled && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight")) {
+      if (event.key === "MediaTrackNext" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight")) {
         event.preventDefault();
         handlePlaybackCommand("next");
         return;
       }
-      if (event.key === "MediaTrackPrevious" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft") || (globalArrowKeysEnabled && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft")) {
+      if (event.key === "MediaTrackPrevious" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft")) {
         event.preventDefault();
         handlePlaybackCommand("previous");
         return;
@@ -1128,7 +1121,7 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [globalArrowKeysEnabled, handlePlaybackCommand, immersiveOpen, keyboardShortcuts]);
+  }, [handlePlaybackCommand, immersiveOpen, keyboardShortcuts]);
 
   useEffect(() => {
     const sourceTracks = activeView === "radar" ? roamTracks : playQueueTracks.length ? playQueueTracks : visibleTracks;
@@ -1231,11 +1224,6 @@ export default function App() {
     window.localStorage.setItem("aria-perf-mode", String(perfMode));
     document.documentElement.classList.toggle("perf-lite", perfMode);
   }, [perfMode]);
-
-  useEffect(() => {
-    window.localStorage.setItem("aria-global-arrow-keys", String(globalArrowKeysEnabled));
-    window.ariaDesktop?.setGlobalArrowKeys?.(globalArrowKeysEnabled);
-  }, [globalArrowKeysEnabled]);
 
   useEffect(() => {
     const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
@@ -1516,7 +1504,11 @@ export default function App() {
                   )}
                   onClick={() => {
                     setQuery("");
-                    setActiveView(item.id);
+                    if (item.id === "settings") {
+                      setSettingsOpen(true);
+                    } else {
+                      setActiveView(item.id);
+                    }
                   }}
                 >
                   <Icon className="size-4" />
@@ -1546,9 +1538,8 @@ export default function App() {
               size="icon"
               aria-label="设置"
               onClick={() => {
-                setSettingsReturnView(activeView === "settings" ? "home" : activeView);
                 setQuery("");
-                setActiveView("settings");
+                setSettingsOpen(true);
               }}
             >
               <Settings2 />
@@ -1778,54 +1769,12 @@ export default function App() {
               )}
               {activeView === "cloud" && <CloudSurface />}
               {activeView === "stats" && <StatsSurface tracks={allTracks} playCounts={playCounts} />}
-              {activeView === "settings" && (
-                <SettingsPanel
-                  backgroundEnabled={backgroundEnabled}
-                  onBackgroundEnabledChange={setBackgroundEnabled}
-                  neteaseAccount={neteaseAccount}
-                  libraryMeta={libraryMeta}
-                  trackCount={allTracks.length}
-                  likedCount={localLikedTracks.length + neteaseLikedDisplayTracks.length}
-                  lyricProgress={lyricProgress}
-                  volume={volume}
-                  onVolumeChange={setVolume}
-                  audioOutputDevices={audioOutputDevices}
-                  selectedSinkId={selectedSinkId}
-                  onSelectedSinkIdChange={setSelectedSinkId}
-                  hifiEnabled={hifiEnabled}
-                  onHifiEnabledChange={setHifiEnabled}
-                  gaplessEnabled={gaplessEnabled}
-                  onGaplessEnabledChange={setGaplessEnabled}
-                  nativeAudioSupported={nativeAudioSupported}
-                  nativeAudioState={nativeAudioState}
-                  audioOutputMode={audioOutputMode}
-                  onAudioOutputModeChange={setAudioOutputMode}
-                  exclusiveMode={exclusiveMode}
-                  keyboardShortcuts={keyboardShortcuts}
-                  onKeyboardShortcutsChange={setKeyboardShortcuts}
-                  perfMode={perfMode}
-                  onPerfModeChange={setPerfMode}
-                  arrowKeysEnabled={globalArrowKeysEnabled}
-                  onArrowKeysChange={setGlobalArrowKeysEnabled}
-                  runtimeInfo={{
-                    view: activeView,
-                    outputMode: audioOutputMode,
-                    nativePlayback: nativePlaybackEnabled,
-                    playing,
-                    queueLength: playQueueTracks.length,
-                    trackCount: allTracks.length,
-                    perfMode,
-                  }}
-                  onLogoutNetease={() => void handleLogoutNetease()}
-                  onClose={() => setActiveView(settingsReturnView)}
-                />
-              )}
                 </>
               )}
             </motion.div>
           </AnimatePresence>
 
-          {activeView === "settings" ? null : activeView === "player" ? (
+          {activeView === "player" ? (
             <PlayerSidePanel
               mode={playerSideView}
               onModeChange={setPlayerSideView}
@@ -1950,10 +1899,64 @@ export default function App() {
           }}
           onPick={(id) => {
             setQuery("");
-            setActiveView(id);
+            if (id === "settings") {
+              setSettingsOpen(true);
+            } else {
+              setActiveView(id);
+            }
             setNavOpen(false);
           }}
         />
+
+        {settingsOpen && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-white/30 p-4 backdrop-blur-sm sm:p-8"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setSettingsOpen(false);
+            }}
+          >
+            <div className="h-[min(88vh,880px)] w-full max-w-3xl overflow-hidden rounded-[1.5rem] shadow-[0_24px_80px_rgba(47,55,76,0.22)]">
+              <SettingsPanel
+                backgroundEnabled={backgroundEnabled}
+                onBackgroundEnabledChange={setBackgroundEnabled}
+                neteaseAccount={neteaseAccount}
+                libraryMeta={libraryMeta}
+                trackCount={allTracks.length}
+                likedCount={localLikedTracks.length + neteaseLikedDisplayTracks.length}
+                lyricProgress={lyricProgress}
+                volume={volume}
+                onVolumeChange={setVolume}
+                audioOutputDevices={audioOutputDevices}
+                selectedSinkId={selectedSinkId}
+                onSelectedSinkIdChange={setSelectedSinkId}
+                hifiEnabled={hifiEnabled}
+                onHifiEnabledChange={setHifiEnabled}
+                gaplessEnabled={gaplessEnabled}
+                onGaplessEnabledChange={setGaplessEnabled}
+                nativeAudioSupported={nativeAudioSupported}
+                nativeAudioState={nativeAudioState}
+                audioOutputMode={audioOutputMode}
+                onAudioOutputModeChange={setAudioOutputMode}
+                exclusiveMode={exclusiveMode}
+                keyboardShortcuts={keyboardShortcuts}
+                onKeyboardShortcutsChange={setKeyboardShortcuts}
+                perfMode={perfMode}
+                onPerfModeChange={setPerfMode}
+                runtimeInfo={{
+                  view: activeView,
+                  outputMode: audioOutputMode,
+                  nativePlayback: nativePlaybackEnabled,
+                  playing,
+                  queueLength: playQueueTracks.length,
+                  trackCount: allTracks.length,
+                  perfMode,
+                }}
+                onLogoutNetease={() => void handleLogoutNetease()}
+                onClose={() => setSettingsOpen(false)}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );

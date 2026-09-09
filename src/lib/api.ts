@@ -73,7 +73,6 @@ declare global {
       showApp?: () => void;
       quitApp?: () => void;
       setBackgroundEnabled?: (enabled: boolean) => void;
-      setGlobalArrowKeys?: (enabled: boolean) => void;
       chooseMusicFolder?: () => Promise<string | null>;
       diagnostics?: {
         getStats?: () => Promise<DiagnosticsStats | null>;

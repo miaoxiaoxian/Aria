@@ -22,7 +22,6 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   showApp: () => ipcRenderer.invoke("aria:show"),
   quitApp: () => ipcRenderer.invoke("aria:quit"),
   setBackgroundEnabled: (enabled) => ipcRenderer.invoke("aria:set-background-enabled", Boolean(enabled)),
-  setGlobalArrowKeys: (enabled) => ipcRenderer.invoke("aria:set-global-arrow-keys", Boolean(enabled)),
   diagnostics: {
     getStats: () => ipcRenderer.invoke("aria:diagnostics:stats"),
     exportLogs: (payload) => ipcRenderer.invoke("aria:diagnostics:export-logs", payload || null),
