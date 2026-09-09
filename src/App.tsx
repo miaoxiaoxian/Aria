@@ -110,6 +110,20 @@ export default function App() {
       return false;
     }
   });
+  const [perfMode, setPerfMode] = useState(() => {
+    try {
+      return window.localStorage.getItem("aria-perf-mode") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [globalArrowKeysEnabled, setGlobalArrowKeysEnabled] = useState(() => {
+    try {
+      return window.localStorage.getItem("aria-global-arrow-keys") !== "false";
+    } catch {
+      return true;
+    }
+  });
   const [playerSideView, setPlayerSideView] = useState<PlayerSideView>(initialPlayerCache.playerSideView ?? "lyrics");
   const [lyricDisplayMode, setLyricDisplayMode] = useState<"original" | "bilingual">(() => {
     try {
@@ -1070,12 +1084,12 @@ export default function App() {
         handlePlaybackCommand("toggle");
         return;
       }
-      if (event.key === "MediaTrackNext" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight")) {
+      if (event.key === "MediaTrackNext" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight") || (globalArrowKeysEnabled && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key === "ArrowRight")) {
         event.preventDefault();
         handlePlaybackCommand("next");
         return;
       }
-      if (event.key === "MediaTrackPrevious" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft")) {
+      if (event.key === "MediaTrackPrevious" || (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft") || (globalArrowKeysEnabled && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key === "ArrowLeft")) {
         event.preventDefault();
         handlePlaybackCommand("previous");
         return;
@@ -1113,7 +1127,7 @@ export default function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handlePlaybackCommand, immersiveOpen, keyboardShortcuts]);
+  }, [globalArrowKeysEnabled, handlePlaybackCommand, immersiveOpen, keyboardShortcuts]);
 
   useEffect(() => {
     const sourceTracks = activeView === "radar" ? roamTracks : playQueueTracks.length ? playQueueTracks : visibleTracks;
@@ -1213,6 +1227,16 @@ export default function App() {
   }, [backgroundEnabled]);
 
   useEffect(() => {
+    window.localStorage.setItem("aria-perf-mode", String(perfMode));
+    document.documentElement.classList.toggle("perf-lite", perfMode);
+  }, [perfMode]);
+
+  useEffect(() => {
+    window.localStorage.setItem("aria-global-arrow-keys", String(globalArrowKeysEnabled));
+    window.ariaDesktop?.setGlobalArrowKeys?.(globalArrowKeysEnabled);
+  }, [globalArrowKeysEnabled]);
+
+  useEffect(() => {
     const updateVisibility = () => setPageVisible(document.visibilityState === "visible");
     const disposeDesktopVisibility = window.ariaDesktop?.onWindowVisibilityChange?.((visible) => {
       setPageVisible(visible);
@@ -1284,6 +1308,21 @@ export default function App() {
       })
       .catch(() => setNeteaseAccount(null));
   }, []);
+
+  async function handleLogoutNetease() {
+    try {
+      await api.clearNeteaseCookie();
+    } catch {
+      // Local logout still proceeds even if the backend rejects.
+    }
+    setNeteaseAccount(null);
+    setNeteaseTracks([]);
+    setNeteaseLikedTracks([]);
+    setDailyTracks([]);
+    setRoamTracks([]);
+    setPlaylistTracks([]);
+    setProviderPlaylists([]);
+  }
 
   useEffect(() => {
     if (activeTrack.source !== "netease" || !activeTrack.providerId) return;
@@ -1769,6 +1808,20 @@ export default function App() {
                   exclusiveMode={exclusiveMode}
                   keyboardShortcuts={keyboardShortcuts}
                   onKeyboardShortcutsChange={setKeyboardShortcuts}
+                  perfMode={perfMode}
+                  onPerfModeChange={setPerfMode}
+                  arrowKeysEnabled={globalArrowKeysEnabled}
+                  onArrowKeysChange={setGlobalArrowKeysEnabled}
+                  runtimeInfo={{
+                    view: activeView,
+                    outputMode: audioOutputMode,
+                    nativePlayback: nativePlaybackEnabled,
+                    playing,
+                    queueLength: playQueueTracks.length,
+                    trackCount: allTracks.length,
+                    perfMode,
+                  }}
+                  onLogoutNetease={() => void handleLogoutNetease()}
                   onClose={() => setActiveView(settingsReturnView)}
                 />
               )}

@@ -1,11 +1,11 @@
-﻿import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useRef } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, Cookie, FolderSearch, Keyboard, Radio, RefreshCw, RotateCcw, Settings2, Sparkles, UserRound, Volume2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, Cookie, Download, FolderSearch, Keyboard, LogOut, Radio, RefreshCw, RotateCcw, Settings2, Sparkles, UserRound, Volume2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Metric } from "@/components/music/shared";
-import { api, type NeteaseAccountSummary, type NeteaseQrStart } from "@/lib/api";
+import { api, type DiagnosticsStats, type NeteaseAccountSummary, type NeteaseQrStart, type RuntimeInfo } from "@/lib/api";
 import type { NativeAudioState } from "@/lib/audioTypes";
 import type { AudioOutputMode } from "@/lib/playerPresentation";
 import {
@@ -18,6 +18,32 @@ import {
   type ShortcutCommand,
 } from "@/lib/keyboardShortcuts";
 import { cn } from "@/lib/utils";
+
+const processLabel: Record<string, string> = {
+  browser: "主进程",
+  renderer: "界面渲染",
+  tab: "界面渲染",
+  gpu: "GPU",
+  utility: "工具进程",
+  zygote: "辅助进程",
+  network: "网络服务",
+};
+
+function gpuVendorLabel(vendorId: number | null) {
+  if (vendorId === 0x10de) return "NVIDIA";
+  if (vendorId === 0x1002) return "AMD";
+  if (vendorId === 0x8086) return "Intel";
+  return vendorId ? `0x${vendorId.toString(16)}` : "未知";
+}
+
+function featureLabel(value: string) {
+  if (value === "enabled") return "硬件加速";
+  if (value === "disabled_software") return "软件渲染(CPU)";
+  if (value === "disabled_off") return "已禁用";
+  if (value === "unavailable") return "不可用";
+  return value;
+}
+
 export function SettingsPanel({
   backgroundEnabled,
   onBackgroundEnabledChange,
@@ -42,6 +68,12 @@ export function SettingsPanel({
   exclusiveMode,
   keyboardShortcuts,
   onKeyboardShortcutsChange,
+  perfMode,
+  onPerfModeChange,
+  runtimeInfo,
+  onLogoutNetease,
+  arrowKeysEnabled,
+  onArrowKeysChange,
   onClose,
 }: {
   backgroundEnabled: boolean;
@@ -67,6 +99,12 @@ export function SettingsPanel({
   exclusiveMode: boolean;
   keyboardShortcuts: KeyboardShortcuts;
   onKeyboardShortcutsChange: (shortcuts: KeyboardShortcuts) => void;
+  perfMode?: boolean;
+  onPerfModeChange?: (value: boolean) => void;
+  runtimeInfo?: RuntimeInfo;
+  onLogoutNetease?: () => void;
+  arrowKeysEnabled?: boolean;
+  onArrowKeysChange?: (value: boolean) => void;
   onClose: () => void;
 }) {
   const [apiState, setApiState] = useState<"checking" | "online" | "offline">("checking");
@@ -75,6 +113,73 @@ export function SettingsPanel({
   const exclusiveReady = Boolean(exclusiveMode && nativeAudioSupported && nativeAudioState?.exclusive);
   const outputModeLabel =
     audioOutputMode === "exclusive" ? "WASAPI Exclusive" : audioOutputMode === "shared" ? "WASAPI Shared" : "System";
+
+  const [diagOpen, setDiagOpen] = useState(false);
+  const [diagStats, setDiagStats] = useState<DiagnosticsStats | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
+
+  function refreshDiagnostics() {
+    window.ariaDesktop?.diagnostics?.getStats?.()
+      .then((stats) => {
+        if (stats) setDiagStats(stats);
+      })
+      .catch(() => undefined);
+  }
+
+  useEffect(() => {
+    if (!diagOpen) return;
+    refreshDiagnostics();
+    const timer = window.setInterval(refreshDiagnostics, 2500);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagOpen]);
+
+  useEffect(() => {
+    if (!diagOpen) return;
+    let frames = 0;
+    let rafId = 0;
+    let sampleTimer = 0;
+    let restTimer = 0;
+    const count = () => {
+      frames += 1;
+      rafId = window.requestAnimationFrame(count);
+    };
+    const start = () => {
+      frames = 0;
+      rafId = window.requestAnimationFrame(count);
+      sampleTimer = window.setTimeout(() => {
+        setFps(Math.round(frames));
+        if (rafId) window.cancelAnimationFrame(rafId);
+        rafId = 0;
+        restTimer = window.setTimeout(start, 2000);
+      }, 1000);
+    };
+    start();
+    return () => {
+      window.clearTimeout(sampleTimer);
+      window.clearTimeout(restTimer);
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [diagOpen]);
+
+  async function exportLogs() {
+    setExporting(true);
+    setExportMessage(null);
+    try {
+      const result = await window.ariaDesktop?.diagnostics?.exportLogs?.({ ...(runtimeInfo ?? {}), fps });
+      if (result?.ok) {
+        setExportMessage(`已导出 ${result.copiedLogs ?? 0} 个日志文件 → ${result.path}`);
+      } else {
+        setExportMessage(result?.error ?? "导出失败");
+      }
+    } catch {
+      setExportMessage("导出失败，请确认桌面版运行环境");
+    } finally {
+      setExporting(false);
+    }
+  }
 
   function refreshApiState() {
     setApiState("checking");
@@ -169,6 +274,35 @@ export function SettingsPanel({
             onChange={onKeyboardShortcutsChange}
           />
 
+          {onArrowKeysChange !== undefined && (
+            <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Shortcut</p>
+                  <h3 className="mt-1 text-base font-semibold">左右键切歌</h3>
+                </div>
+                <button
+                  className={cn(
+                    "flex h-8 w-14 items-center rounded-full p-1 transition",
+                    arrowKeysEnabled ? "bg-neutral-950" : "bg-neutral-200",
+                  )}
+                  onClick={() => onArrowKeysChange(!arrowKeysEnabled)}
+                  aria-label="切换左右键切歌"
+                >
+                  <span
+                    className={cn(
+                      "size-6 rounded-full bg-white shadow-sm transition",
+                      arrowKeysEnabled && "translate-x-6",
+                    )}
+                  />
+                </button>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-neutral-500">
+                开启后，在 Aria 内或切到其他软件时，按键盘 ← / → 方向键即可切换上一首/下一首；输入框内方向键仍用于移动光标。
+              </p>
+            </section>
+          )}
+
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -210,6 +344,12 @@ export function SettingsPanel({
                 <p className="mt-1 truncate text-xs text-neutral-500">{neteaseAccount?.cookiePreview ?? "右上角头像里绑定"}</p>
               </div>
             </div>
+            {neteaseAccount?.connected && onLogoutNetease && (
+              <Button variant="ghost" size="sm" className="mt-3 w-full" onClick={onLogoutNetease}>
+                <LogOut />
+                退出登录
+              </Button>
+            )}
           </section>
 
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
@@ -412,6 +552,127 @@ export function SettingsPanel({
                 />
               </button>
             </div>
+          </section>
+
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between gap-3 text-left"
+              onClick={() => setDiagOpen((value) => !value)}
+              aria-expanded={diagOpen}
+            >
+              <span className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Diagnostics</p>
+                <span className="mt-1 block text-base font-semibold">诊断与日志</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <Badge>{diagOpen ? "展开中" : "点击展开"}</Badge>
+                <ChevronDown className={cn("size-5 text-neutral-400 transition-transform duration-200", diagOpen && "rotate-180")} />
+              </span>
+            </button>
+            <p className="mt-2 text-xs leading-5 text-neutral-500">
+              展开后实时查看各进程 CPU/内存占用，并可一键导出日志发给开发者排查问题。
+            </p>
+
+            {diagOpen && (
+              <div className="mt-3">
+                {diagStats?.processes?.length ? (
+                  <div className="grid gap-1.5 sm:grid-cols-2">
+                    {diagStats.processes.map((process) => (
+                      <div
+                        key={`${process.type}-${process.pid}`}
+                        className="flex items-center justify-between gap-2 rounded-[0.9rem] bg-white/55 px-3 py-1.5 text-xs"
+                      >
+                        <span className="font-medium text-neutral-600">{processLabel[process.type] ?? process.type}</span>
+                        <span className="text-neutral-500">
+                          CPU {process.cpuPercent.toFixed(1)}% · 内存 {process.memoryMb} MB
+                        </span>
+                      </div>
+                    ))}
+                    {diagStats.backendPid != null && (
+                      <div className="flex items-center justify-between gap-2 rounded-[0.9rem] bg-white/55 px-3 py-1.5 text-xs">
+                        <span className="font-medium text-neutral-600">本地后端</span>
+                        <span className="text-neutral-500">内存 {diagStats.backendMemoryMb ?? "--"} MB</span>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-neutral-500">正在读取进程占用…</p>
+                )}
+
+                {onPerfModeChange && (
+                  <div className="mt-3 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-neutral-600">性能模式</p>
+                      <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
+                        关闭毛玻璃等合成效果，可明显降低界面渲染 CPU（A 卡/低配机建议开启）
+                      </p>
+                    </div>
+                    <button
+                      className={cn(
+                        "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
+                        perfMode ? "bg-neutral-950" : "bg-neutral-200",
+                      )}
+                      onClick={() => onPerfModeChange(!perfMode)}
+                      aria-label="切换性能模式"
+                    >
+                      <span className={cn("size-5 rounded-full bg-white shadow-sm transition", perfMode && "translate-x-5")} />
+                    </button>
+                  </div>
+                )}
+
+                <div className="mt-2 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-neutral-600">AMD GPU 渲染优化</p>
+                    <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
+                      A 卡启动时强制 GPU 渲染；关闭后重启可对比 CPU 占用（当前：{diagStats ? (diagStats.gpuOptimizeEnabled ? "开启" : "关闭") : "--"}）
+                    </p>
+                  </div>
+                  <button
+                    className={cn(
+                      "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
+                      diagStats?.gpuOptimizeEnabled ? "bg-neutral-950" : "bg-neutral-200",
+                    )}
+                    onClick={() => {
+                      const next = !(diagStats?.gpuOptimizeEnabled ?? true);
+                      window.ariaDesktop?.diagnostics?.setGpuOptimize?.(next).catch(() => undefined);
+                      setDiagStats((current) => (current ? { ...current, gpuOptimizeEnabled: next } : current));
+                      setExportMessage("GPU 渲染优化已切换，重启 Aria 后生效");
+                    }}
+                    aria-label="切换 AMD GPU 渲染优化"
+                  >
+                    <span
+                      className={cn(
+                        "size-5 rounded-full bg-white shadow-sm transition",
+                        diagStats?.gpuOptimizeEnabled && "translate-x-5",
+                      )}
+                    />
+                  </button>
+                </div>
+
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" className="flex-1" onClick={() => void exportLogs()} disabled={exporting}>
+                    <Download />
+                    {exporting ? "导出中…" : "导出日志"}
+                  </Button>
+                  <Button size="sm" variant="subtle" className="flex-1" onClick={refreshDiagnostics}>
+                    <RefreshCw />
+                    刷新
+                  </Button>
+                </div>
+                {exportMessage && <p className="mt-3 break-all text-xs text-neutral-500">{exportMessage}</p>}
+                <p className="mt-2 text-xs leading-relaxed text-neutral-500">
+                  {diagStats
+                    ? `渲染帧率 ${fps} fps · CPU ${diagStats.cpuModel ?? "未知"}（${diagStats.cpuCores} 核）· 显卡 ${gpuVendorLabel(diagStats.gpuVendorId)} · 已运行 ${Math.round(diagStats.uptimeSeconds / 60)} 分钟 · v${diagStats.appVersion}`
+                    : "展开后自动读取诊断数据。"}
+                </p>
+                {diagStats?.gpuFeatures && (
+                  <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                    合成 {featureLabel(diagStats.gpuFeatures.gpuCompositing)} · 光栅化 {featureLabel(diagStats.gpuFeatures.rasterization)} · WebGL {featureLabel(diagStats.gpuFeatures.webgl)} · 画布 {featureLabel(diagStats.gpuFeatures.canvas2d)}
+                  </p>
+                )}
+              </div>
+            )}
           </section>
         </div>
         <div className="flex items-center justify-between border-t border-neutral-950/6 px-5 py-3 text-xs text-neutral-400 sm:px-7">

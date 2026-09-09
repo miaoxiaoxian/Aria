@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   showApp: () => ipcRenderer.invoke("aria:show"),
   quitApp: () => ipcRenderer.invoke("aria:quit"),
   setBackgroundEnabled: (enabled) => ipcRenderer.invoke("aria:set-background-enabled", Boolean(enabled)),
+  setGlobalArrowKeys: (enabled) => ipcRenderer.invoke("aria:set-global-arrow-keys", Boolean(enabled)),
+  diagnostics: {
+    getStats: () => ipcRenderer.invoke("aria:diagnostics:stats"),
+    exportLogs: (payload) => ipcRenderer.invoke("aria:diagnostics:export-logs", payload || null),
+    setGpuOptimize: (enabled) => ipcRenderer.invoke("aria:set-gpu-optimize", Boolean(enabled)),
+  },
   chooseMusicFolder: () => ipcRenderer.invoke("aria:choose-music-folder"),
   updateTaskbarPlayback: (payload) => ipcRenderer.invoke("aria:update-taskbar-playback", payload || {}),
   setTaskbarPreviewRect: (rect) => ipcRenderer.invoke("aria:set-thumbnail-clip", rect || null),
