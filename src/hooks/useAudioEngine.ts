@@ -618,6 +618,45 @@ export function useAudioEngine(options: {
     audioErrorRef.current = { count: 0, lastAt: 0 };
   }
 
+  // Replays the current track from the start through the native engine.
+  // mpv unloads the file at EOF and sits idle, so a plain seek(0) cannot
+  // restart it — the file has to be loaded again from the beginning.
+  const restartNativeTrack = useEffectEvent(async () => {
+    const nativeAudio = window.ariaDesktop?.nativeAudio;
+    if (!nativePlaybackEnabled || !nativeAudio?.supported) return false;
+    const url = activeStreamUrl;
+    if (!url || options.activeTrack.id === options.idleTrackId) return false;
+    const nextLoadKey = [
+      url,
+      options.activeTrack.nativeDevice ?? "",
+      options.activeTrack.nativeStart ?? "",
+      options.activeTrack.nativeEnd ?? "",
+      options.activeTrack.cdReadQuality ?? "high",
+    ].join("\u0000");
+    nativeLoadedUrlRef.current = nextLoadKey;
+    options.pendingSeekRef.current = 0;
+    commitPlaybackTime(0, true);
+    try {
+      await nativeAudio.load({
+        trackId: options.activeTrack.id,
+        url,
+        position: 0,
+        paused: false,
+        volume: options.volume,
+        exclusive: options.exclusiveMode,
+        deviceId: selectedSinkId,
+        nativeDevice: options.activeTrack.nativeDevice ?? null,
+        startChapter: options.activeTrack.nativeStart ?? null,
+        endChapter: options.activeTrack.nativeEnd ?? null,
+        cdReadQuality: options.activeTrack.cdReadQuality ?? "high",
+      });
+      return true;
+    } catch {
+      nativeLoadedUrlRef.current = null;
+      return false;
+    }
+  });
+
   return {
     audioRef,
     analyserRef,
@@ -633,5 +672,6 @@ export function useAudioEngine(options: {
     audioElementStreamUrl,
     handleAudioError,
     resetAudioError,
+    restartNativeTrack,
   };
 }

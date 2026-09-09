@@ -459,6 +459,7 @@ export default function App() {
     activeStreamUrl,
     handleAudioError,
     resetAudioError,
+    restartNativeTrack,
   } = useAudioEngine({
     activeTrack,
     activeTrackId,
@@ -545,8 +546,14 @@ export default function App() {
     resetPlaybackTime();
     setPlaying(true);
     if (nativePlaybackEnabled) {
-      window.ariaDesktop?.nativeAudio?.seek?.(0).catch(() => undefined);
-      window.ariaDesktop?.nativeAudio?.setPaused?.(false).catch(() => undefined);
+      if (restartNativeTrack) {
+        void restartNativeTrack().then((restarted) => {
+          if (!restarted) setPlaying(false);
+        });
+      } else {
+        window.ariaDesktop?.nativeAudio?.seek?.(0).catch(() => undefined);
+        window.ariaDesktop?.nativeAudio?.setPaused?.(false).catch(() => undefined);
+      }
       return;
     }
     const audio = audioRef.current;
@@ -1577,6 +1584,7 @@ export default function App() {
         ref={audioRef}
         crossOrigin="anonymous"
         preload="metadata"
+        loop={repeatMode === "one" && !nativePlaybackEnabled}
         onTimeUpdate={(event) => {
           if (nativePlaybackEnabled) return;
           commitPlaybackTime(event.currentTarget.currentTime || 0);
