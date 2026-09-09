@@ -45,12 +45,15 @@ export function useAudioEngine(options: {
   const [nativePlaybackFailed, setNativePlaybackFailed] = useState(false);
   const [nativeAnalyserWakeToken, setNativeAnalyserWakeToken] = useState(0);
 
-  // Keep the audible stream in Aria's WASAPI session on Windows. This covers
-  // normal system output and the explicit Shared/Exclusive modes while also
-  // giving process-loopback tools (OOPZ, Discord, etc.) one stable application
-  // session to capture. Chromium keeps only a small analyser copy.
+  // mpv (native WASAPI) owns the audible stream for the Shared/Exclusive
+  // output modes. In the "system" mode Chromium plays the stream itself so
+  // the OS media session is a real, audible session (full artwork + prev/next
+  // in the Windows media card); only tracks that require native decoding
+  // (CD, exotic containers) still fall back to mpv.
   const nativePlaybackRequested = Boolean(
-    nativeAudioSupported && (activeTrack.streamUrl || activeTrack.requiresNativePlayback),
+    nativeAudioSupported &&
+      options.audioOutputMode !== "system" &&
+      (activeTrack.streamUrl || activeTrack.requiresNativePlayback),
   );
   const nativePlaybackEnabled = Boolean(nativePlaybackRequested && !nativePlaybackFailed);
 

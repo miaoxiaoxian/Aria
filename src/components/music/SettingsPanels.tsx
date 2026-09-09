@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useRef } from "react";
 import { motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, Cookie, Download, FolderSearch, Keyboard, LogOut, Radio, RefreshCw, RotateCcw, Settings2, Sparkles, UserRound, Volume2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, ChevronDown, Cookie, Download, FolderSearch, Keyboard, LogOut, Radio, RefreshCw, RotateCcw, Settings2, Sparkles, UserRound, Volume2, X, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Metric } from "@/components/music/shared";
@@ -114,6 +114,7 @@ export function SettingsPanel({
   const [diagStats, setDiagStats] = useState<DiagnosticsStats | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [perfMessage, setPerfMessage] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
 
   function refreshDiagnostics() {
@@ -131,6 +132,13 @@ export function SettingsPanel({
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diagOpen]);
+
+  // The performance/GPU toggles live outside the diagnostics fold, so read
+  // the GPU optimization state once when the settings panel opens.
+  useEffect(() => {
+    refreshDiagnostics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!diagOpen) return;
@@ -357,22 +365,22 @@ export function SettingsPanel({
                   {
                     mode: "system" as const,
                     label: "系统音频",
-                    badge: "兼容",
-                    desc: "WASAPI 共享输出，频谱直接跟随播放器。",
+                    badge: "推荐",
+                    desc: "浏览器直出 · 系统媒体卡完整支持封面、上一首/下一首。",
                     Icon: Volume2,
                   },
                   {
                     mode: "shared" as const,
                     label: "WASAPI 共享",
-                    badge: "兼容",
-                    desc: "独立 Aria 音频会话，适合 OOPZ 等应用共享。",
+                    badge: "mpv 直通",
+                    desc: "独立 Aria 音频会话，适合 OOPZ 等应用共享；媒体卡仅基础控制。",
                     Icon: Radio,
                   },
                   {
                     mode: "exclusive" as const,
                     label: "WASAPI 独占",
                     badge: exclusiveReady ? "Locked" : "直通",
-                    desc: "独占端点，适合 DAC 或声卡直连。",
+                    desc: "mpv 独占端点，适合 DAC 或声卡直连；媒体卡仅基础控制。",
                     Icon: Sparkles,
                   },
                 ].map(({ mode, label, badge, desc, Icon }) => {
@@ -522,6 +530,76 @@ export function SettingsPanel({
           </section>
 
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Performance</p>
+                <h3 className="mt-1 text-base font-semibold">性能与渲染优化</h3>
+              </div>
+              <Zap className="size-5 text-neutral-400" />
+            </div>
+            <p className="mt-2 text-xs leading-5 text-neutral-500">
+              界面卡顿或 CPU 占用偏高时，直接在这里调整，无需展开诊断日志。
+            </p>
+            <div className="mt-3 grid gap-2 lg:grid-cols-2">
+              {onPerfModeChange && (
+                <div className="flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-neutral-700">性能模式</p>
+                    <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
+                      关闭毛玻璃等合成效果，明显降低界面渲染 CPU（A 卡/低配机建议开启）
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
+                      perfMode ? "bg-neutral-950" : "bg-neutral-200",
+                    )}
+                    onClick={() => onPerfModeChange(!perfMode)}
+                    aria-label="切换性能模式"
+                  >
+                    <span className={cn("size-5 rounded-full bg-white shadow-sm transition", perfMode && "translate-x-5")} />
+                  </button>
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-neutral-700">AMD GPU 渲染优化</p>
+                  <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
+                    A 卡启动时强制 GPU 渲染，关闭后重启可对比 CPU 占用（当前：{diagStats ? (diagStats.gpuOptimizeEnabled ? "开启" : "关闭") : "读取中…"}）
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
+                    diagStats?.gpuOptimizeEnabled ? "bg-neutral-950" : "bg-neutral-200",
+                  )}
+                  onClick={() => {
+                    const next = !(diagStats?.gpuOptimizeEnabled ?? true);
+                    window.ariaDesktop?.diagnostics?.setGpuOptimize?.(next).catch(() => undefined);
+                    setDiagStats((current) => (current ? { ...current, gpuOptimizeEnabled: next } : current));
+                    setPerfMessage("GPU 渲染优化已切换，重启 Aria 后生效");
+                  }}
+                  aria-label="切换 AMD GPU 渲染优化"
+                >
+                  <span
+                    className={cn(
+                      "size-5 rounded-full bg-white shadow-sm transition",
+                      diagStats?.gpuOptimizeEnabled && "translate-x-5",
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+            {perfMessage && (
+              <p className="mt-2 text-xs text-neutral-500" role="status">
+                {perfMessage}
+              </p>
+            )}
+          </section>
+
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
             <button
               type="button"
               className="flex w-full items-center justify-between gap-3 text-left"
@@ -566,56 +644,6 @@ export function SettingsPanel({
                 ) : (
                   <p className="text-xs text-neutral-500">正在读取进程占用…</p>
                 )}
-
-                {onPerfModeChange && (
-                  <div className="mt-3 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-neutral-600">性能模式</p>
-                      <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
-                        关闭毛玻璃等合成效果，可明显降低界面渲染 CPU（A 卡/低配机建议开启）
-                      </p>
-                    </div>
-                    <button
-                      className={cn(
-                        "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
-                        perfMode ? "bg-neutral-950" : "bg-neutral-200",
-                      )}
-                      onClick={() => onPerfModeChange(!perfMode)}
-                      aria-label="切换性能模式"
-                    >
-                      <span className={cn("size-5 rounded-full bg-white shadow-sm transition", perfMode && "translate-x-5")} />
-                    </button>
-                  </div>
-                )}
-
-                <div className="mt-2 flex items-center justify-between gap-3 rounded-[0.9rem] bg-white/55 px-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-neutral-600">AMD GPU 渲染优化</p>
-                    <p className="mt-0.5 text-[0.7rem] leading-relaxed text-neutral-400">
-                      A 卡启动时强制 GPU 渲染；关闭后重启可对比 CPU 占用（当前：{diagStats ? (diagStats.gpuOptimizeEnabled ? "开启" : "关闭") : "--"}）
-                    </p>
-                  </div>
-                  <button
-                    className={cn(
-                      "flex h-7 w-12 shrink-0 items-center rounded-full p-0.5 transition",
-                      diagStats?.gpuOptimizeEnabled ? "bg-neutral-950" : "bg-neutral-200",
-                    )}
-                    onClick={() => {
-                      const next = !(diagStats?.gpuOptimizeEnabled ?? true);
-                      window.ariaDesktop?.diagnostics?.setGpuOptimize?.(next).catch(() => undefined);
-                      setDiagStats((current) => (current ? { ...current, gpuOptimizeEnabled: next } : current));
-                      setExportMessage("GPU 渲染优化已切换，重启 Aria 后生效");
-                    }}
-                    aria-label="切换 AMD GPU 渲染优化"
-                  >
-                    <span
-                      className={cn(
-                        "size-5 rounded-full bg-white shadow-sm transition",
-                        diagStats?.gpuOptimizeEnabled && "translate-x-5",
-                      )}
-                    />
-                  </button>
-                </div>
 
                 <div className="mt-3 flex gap-2">
                   <Button size="sm" className="flex-1" onClick={() => void exportLogs()} disabled={exporting}>
