@@ -1,5 +1,5 @@
-﻿import { useMemo } from "react";
-import { BarChart3, CalendarDays, Headphones, History, Pause, Play } from "lucide-react";
+import { useMemo, useState } from "react";
+import { BarChart3, CalendarDays, Headphones, History, Maximize2, Pause, Play, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CopyableTrackText, CoverArt, EmptyState, StatTile } from "@/components/music/shared";
@@ -136,7 +136,34 @@ export function HomeSurface({
         .slice(0, 20),
     [homeTracks, playCounts],
   );
-  const recentHistory = playHistory.slice(0, 8);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const recentHistory = playHistory.slice(0, 12);
+  const renderHistoryRow = (entry: PlayHistoryEntry, modal = false) => (
+    <button
+      key={`${entry.track.id}-${entry.playedAt}`}
+      className={
+        "grid grid-cols-[3rem_1fr_auto] items-center gap-3 rounded-[1.1rem] p-2.5 text-left shadow-sm transition " +
+        (modal ? "bg-white/70 hover:bg-white" : "bg-white/52 hover:bg-white")
+      }
+      onClick={() => {
+        onPickTrack(entry.track.id);
+        setHistoryExpanded(false);
+      }}
+    >
+      <CoverArt track={entry.track} className="size-12 rounded-xl" />
+      <div className="min-w-0">
+        <p className="truncate text-sm font-semibold">
+          <CopyableTrackText track={entry.track} field="title">{entry.track.title}</CopyableTrackText>
+        </p>
+        <p className="truncate text-xs text-neutral-500">
+          <CopyableTrackText track={entry.track} field="artist">{entry.track.artist}</CopyableTrackText>
+        </p>
+      </div>
+      <span className="text-xs text-neutral-500">
+        {new Date(entry.playedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })} · {entry.count} 次
+      </span>
+    </button>
+  );
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[minmax(0,0.86fr)_minmax(0,1.14fr)] gap-4 overflow-hidden">
@@ -164,6 +191,11 @@ export function HomeSurface({
           </div>
           <div className="absolute inset-0 bg-gradient-to-t from-black/82 via-black/24 to-transparent" />
           <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(255,255,255,0.14),transparent_34%,rgba(0,0,0,0.24))]" />
+          <div className="absolute left-5 top-5 z-20">
+            <span className="flex size-9 items-center justify-center rounded-full border border-white/30 bg-black/40 text-white backdrop-blur-md transition group-hover:bg-black/60">
+              <Maximize2 className="size-4" />
+            </span>
+          </div>
           <div className="absolute right-5 top-5 z-20">
             <Button
               className="bg-white text-neutral-950 shadow-[0_14px_34px_rgba(0,0,0,0.18)] hover:bg-white/92"
@@ -184,7 +216,8 @@ export function HomeSurface({
             </div>
           ) : (
             <div className="absolute bottom-5 left-5 right-5 z-20">
-              <h2 className="line-clamp-2 text-3xl font-semibold leading-tight text-white drop-shadow">
+              <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-white/75">现在播放</p>
+              <h2 className="mt-1.5 line-clamp-2 text-3xl font-semibold leading-tight text-white drop-shadow">
                 <CopyableTrackText track={activeTrack} field="title">{activeTrack.title}</CopyableTrackText>
               </h2>
               <p className="mt-2 truncate text-base font-medium text-white/84">
@@ -231,35 +264,45 @@ export function HomeSurface({
         <div className="glass min-h-0 overflow-hidden rounded-[1.5rem] p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">最近播放</h2>
-            <Badge>History</Badge>
+            <div className="flex items-center gap-2">
+              <Badge>History</Badge>
+              <Button variant="ghost" size="icon" aria-label="展开最近播放" onClick={() => setHistoryExpanded(true)}>
+                <Maximize2 />
+              </Button>
+            </div>
           </div>
           <div className="no-scrollbar mt-4 grid max-h-[calc(100%-3.5rem)] gap-2 overflow-y-auto pr-1">
-            {recentHistory.map((entry) => (
-              <button
-                key={`${entry.track.id}-${entry.playedAt}`}
-                className="grid grid-cols-[3rem_1fr_auto] items-center gap-3 rounded-[1.1rem] bg-white/52 p-2.5 text-left shadow-sm transition hover:bg-white"
-                onClick={() => onPickTrack(entry.track.id)}
-              >
-                <CoverArt track={entry.track} className="size-12 rounded-xl" />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">
-                    <CopyableTrackText track={entry.track} field="title">{entry.track.title}</CopyableTrackText>
-                  </p>
-                  <p className="truncate text-xs text-neutral-500">
-                    <CopyableTrackText track={entry.track} field="artist">{entry.track.artist}</CopyableTrackText>
-                  </p>
-                </div>
-                <span className="text-right text-xs font-medium leading-5 text-neutral-500">
-                  {new Date(entry.playedAt).toLocaleDateString("zh-CN", { month: "short", day: "numeric" })}
-                  <br />
-                  {entry.count} 次
-                </span>
-              </button>
-            ))}
+            {recentHistory.map((entry) => renderHistoryRow(entry))}
             {!recentHistory.length && <EmptyState text="播放过歌曲后，这里会显示最近记录。" />}
           </div>
         </div>
       </section>
+
+      {historyExpanded && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-neutral-950/28 p-6 backdrop-blur-md"
+          onClick={() => setHistoryExpanded(false)}
+        >
+          <div
+            className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/80 bg-white/95 p-5 shadow-[0_28px_90px_rgba(20,24,35,0.3)] sm:p-6"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-neutral-950/8 pb-4">
+              <div>
+                <Badge>History</Badge>
+                <h2 className="mt-2 text-2xl font-semibold">最近播放</h2>
+              </div>
+              <Button variant="ghost" size="icon" aria-label="关闭" onClick={() => setHistoryExpanded(false)}>
+                <X />
+              </Button>
+            </div>
+            <div className="no-scrollbar mt-3 grid min-h-0 flex-1 gap-2 overflow-y-auto pr-1">
+              {playHistory.map((entry) => renderHistoryRow(entry, true))}
+              {!playHistory.length && <EmptyState text="播放过歌曲后，这里会显示最近记录。" />}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

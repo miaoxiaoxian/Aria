@@ -10,7 +10,7 @@ import {
   StatsSurface,
 } from "@/components/music/CollectionSurfaces";
 import { LibrarySurface as LibrarySurfacePanel } from "@/components/music/LibrarySurface";
-import { HomeSidePanel, HomeSurface, HistorySurface } from "@/components/music/HomeSurfaces";
+import { HomeSurface } from "@/components/music/HomeSurfaces";
 import { SearchSurface, ArtistsSurface } from "@/components/music/DiscoverySurfaces";
 import { PlayerSidePanel, QueueList } from "@/components/music/PlayerSidePanels";
 import { ImmersivePlayerView, PlayerSurface } from "@/components/music/PlayerViews";
@@ -82,6 +82,7 @@ export default function App() {
   const [qualityLevel, setQualityLevel] = useState<QualityLevel>(initialPlayerCache.qualityLevel ?? "lossless");
   const [playQueueIds, setPlayQueueIds] = useState<string[]>(initialPlayerCache.playQueueIds ?? []);
   const [navOpen, setNavOpen] = useState(false);
+  const [queueExpanded, setQueueExpanded] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try {
@@ -1732,12 +1733,6 @@ export default function App() {
                   onPickTrack={chooseTrack}
                 />
               )}
-              {activeView === "history" && (
-                <HistorySurface
-                  history={displayHistory}
-                  onPickTrack={chooseTrack}
-                />
-              )}
               {activeView === "playlists" && (
                 <PlaylistSurface
                   playlists={providerPlaylists}
@@ -1842,15 +1837,6 @@ export default function App() {
               onPickTrack={chooseTrack}
               onSeek={seekTo}
             />
-          ) : activeView === "home" ? (
-            <HomeSidePanel
-              tracks={visibleTracks}
-              playCounts={playCounts}
-              playHistory={displayHistory}
-              onOpenHistory={() => setActiveView("history")}
-              onOpenStats={() => setActiveView("stats")}
-              onPickTrack={chooseTrack}
-            />
           ) : (
           <aside className="glass hidden min-h-0 flex-col rounded-[1.5rem] p-4 lg:flex">
             <div className="flex items-center justify-between gap-3">
@@ -1860,7 +1846,7 @@ export default function App() {
                 </p>
                 <h2 className="mt-1 text-xl font-semibold">下一首</h2>
               </div>
-              <Button variant="ghost" size="icon" aria-label="展开队列">
+              <Button variant="ghost" size="icon" aria-label="展开队列" onClick={() => setQueueExpanded(true)}>
                 <ListMusic />
               </Button>
             </div>
@@ -1912,6 +1898,36 @@ export default function App() {
             />
           )}
         </AnimatePresence>
+
+        {queueExpanded && (
+          <div
+            className="fixed inset-0 z-[90] flex items-center justify-center bg-neutral-950/28 p-6 backdrop-blur-md"
+            onClick={() => setQueueExpanded(false)}
+          >
+            <div
+              className="flex max-h-[82vh] w-full max-w-2xl flex-col overflow-hidden rounded-[1.5rem] border border-white/80 bg-white/95 p-5 shadow-[0_28px_90px_rgba(20,24,35,0.3)] sm:p-6"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-neutral-950/8 pb-4">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-[0.24em] text-neutral-400">Queue</p>
+                  <h2 className="mt-1 text-xl font-semibold">播放队列</h2>
+                </div>
+                <Button variant="ghost" size="icon" aria-label="关闭" onClick={() => setQueueExpanded(false)}>
+                  <X />
+                </Button>
+              </div>
+              <QueueList
+                tracks={playQueueTracks.length ? playQueueTracks : visibleTracks}
+                activeTrackId={activeTrackId}
+                onPickTrack={(id) => {
+                  chooseTrack(id);
+                  setQueueExpanded(false);
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         <FloatingNav
           activeView={activeView}
