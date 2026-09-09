@@ -486,19 +486,19 @@ function syncTaskbarPlayback(reason = "state") {
   try {
     const applied = mainWindow.setThumbarButtons([
       {
-        tooltip: "Previous",
+        tooltip: "上一首",
         icon: taskbarIcons.previous,
         flags: hasTrack ? [] : ["disabled"],
         click: () => sendPlaybackCommand("previous"),
       },
       {
-        tooltip: taskbarPlayback.playing ? "Pause" : "Play",
+        tooltip: taskbarPlayback.playing ? "暂停" : "播放",
         icon: taskbarPlayback.playing ? taskbarIcons.pause : taskbarIcons.play,
         flags: hasTrack ? [] : ["disabled"],
         click: () => sendPlaybackCommand("toggle"),
       },
       {
-        tooltip: "Next",
+        tooltip: "下一首",
         icon: taskbarIcons.next,
         flags: hasTrack ? [] : ["disabled"],
         click: () => sendPlaybackCommand("next"),
