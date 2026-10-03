@@ -14,6 +14,7 @@ import { HomeSurface } from "@/components/music/HomeSurfaces";
 import { SearchSurface, ArtistsSurface } from "@/components/music/DiscoverySurfaces";
 import { PlayerSidePanel, QueueList } from "@/components/music/PlayerSidePanels";
 import { ImmersivePlayerView, PlayerSurface } from "@/components/music/PlayerViews";
+import { EqualizerPanel } from "@/components/music/EqualizerPanel";
 import { FloatingNav } from "@/components/music/FloatingNav";
 import { AccountPanel, OnboardingDialog, SettingsPanel } from "@/components/music/SettingsPanels";
 import ariaIconUrl from "../build/icon.png";
@@ -46,6 +47,7 @@ import {
   type QualityLevel,
 } from "@/lib/playerPresentation";
 import { commitPlaybackTime, getPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
+import { readCachedEqualizerSettings, writeCachedEqualizerSettings, type EqualizerSettings } from "@/lib/equalizer";
 import { materializeQueueIds, mergeQueueTrackSources, orderedQueueIds, playableTracks } from "@/lib/playQueue";
 import { matchesShortcut, readKeyboardShortcuts, writeKeyboardShortcuts, type KeyboardShortcuts } from "@/lib/keyboardShortcuts";
 import { sourceLabel } from "@/lib/trackLabels";
@@ -141,6 +143,8 @@ export default function App() {
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
   const [audioOutputMode, setAudioOutputMode] = useState<AudioOutputMode>(() => readCachedAudioSettings().outputMode ?? "system");
+  const [equalizer, setEqualizer] = useState<EqualizerSettings>(readCachedEqualizerSettings);
+  const [equalizerOpen, setEqualizerOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navCloseTimer = useRef<number | null>(null);
@@ -470,6 +474,7 @@ export default function App() {
     hifiEnabled,
     gaplessEnabled,
     audioOutputMode,
+    equalizer,
     pageVisible,
     analyserEnabled: pageVisible && (activeView === "player" || immersiveOpen),
     pendingSeekRef,
@@ -771,6 +776,10 @@ export default function App() {
       // Lyric presentation settings are best-effort.
     }
   }, [lyricDisplayMode]);
+
+  useEffect(() => {
+    writeCachedEqualizerSettings(equalizer);
+  }, [equalizer]);
 
   useEffect(() => {
     const updateTaskbarPlayback = window.ariaDesktop?.updateTaskbarPlayback;
@@ -1842,6 +1851,8 @@ export default function App() {
                   onNext={() => pickRelativeTrack(1)}
                   onPrevious={() => pickRelativeTrack(-1)}
                   onOpenImmersive={() => void openImmersiveView()}
+                  onOpenEqualizer={() => setEqualizerOpen(true)}
+                  equalizerEnabled={equalizer.enabled}
                   onReplaceLocalArtwork={replaceLocalArtwork}
                   liked={activeTrack.source === "netease" ? Boolean(neteaseLikedIds[activeTrack.id]) : Boolean(likedTrackIds[activeTrack.id])}
                   onToggleLike={() => toggleLikeTrack(activeTrack.id)}
@@ -2114,6 +2125,25 @@ export default function App() {
                 }}
                 onLogoutNetease={() => void handleLogoutNetease()}
                 onClose={() => setSettingsOpen(false)}
+              />
+            </div>
+          </div>
+        )}
+
+        {equalizerOpen && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-white/30 p-4 backdrop-blur-sm sm:p-8"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setEqualizerOpen(false);
+            }}
+          >
+            <div className="h-[min(86vh,760px)] w-full max-w-5xl overflow-hidden rounded-[1.5rem] shadow-[0_24px_80px_rgba(47,55,76,0.22)]">
+              <EqualizerPanel
+                settings={equalizer}
+                onChange={setEqualizer}
+                onClose={() => setEqualizerOpen(false)}
+                nativePlaybackEnabled={nativePlaybackEnabled}
+                audioOutputMode={audioOutputMode}
               />
             </div>
           </div>

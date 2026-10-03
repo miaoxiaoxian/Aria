@@ -4,6 +4,7 @@ import type { NativeAudioState } from "@/lib/audioTypes";
 import { api } from "@/lib/api";
 import { commitPlaybackTime, getPlaybackTime } from "@/lib/playbackClock";
 import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
+import { equalizerBandsForMode, equalizerModeQ, isEqualizerActive, type EqualizerSettings } from "@/lib/equalizer";
 import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type QualityLevel } from "@/lib/playerPresentation";
 
 // Owns the media pipeline: the HTML audio element, the mpv native bridge
@@ -19,6 +20,7 @@ export function useAudioEngine(options: {
   hifiEnabled: boolean;
   gaplessEnabled: boolean;
   audioOutputMode: AudioOutputMode;
+  equalizer: EqualizerSettings;
   pageVisible: boolean;
   analyserEnabled: boolean;
   pendingSeekRef: { current: number };
@@ -86,6 +88,7 @@ export function useAudioEngine(options: {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const equalizerNodesRef = useRef<BiquadFilterNode[]>([]);
   const nativeSilenceGainRef = useRef<GainNode | null>(null);
   const analyserOutputModeRef = useRef<"audible" | "silent" | null>(null);
   const nativeLoadedUrlRef = useRef<string | null>(null);
@@ -526,7 +529,10 @@ export function useAudioEngine(options: {
       }
       analyserRef.current = context.createAnalyser();
       configureSpectrumAnalyser(analyserRef.current);
-      audioSourceRef.current.connect(analyserRef.current);
+      // DSP equalizer: one peaking biquad per active band, inserted between the
+      // media element and the analyser so every output mode that plays through
+      // Chromium (System) is filtered in real time.
+      connectEqualizerChain(context);
     }
 
     void context.resume();
@@ -571,6 +577,86 @@ export function useAudioEngine(options: {
     options.playing,
   ]);
 
+  // (Re)builds the biquad chain for the active band layout: media element →
+  // peaking filters → analyser. Switching between the 18-band and 31-band
+  // layouts changes the node count, so the chain is rewired as a whole.
+  function connectEqualizerChain(context: AudioContext) {
+    const source = audioSourceRef.current;
+    const analyser = analyserRef.current;
+    if (!source || !analyser) return;
+
+    if (equalizerNodesRef.current.length) {
+      try {
+        source.disconnect();
+      } catch {
+        // The source may already be detached.
+      }
+      for (const node of equalizerNodesRef.current) {
+        try {
+          node.disconnect();
+        } catch {
+          // Ignore stale node teardown errors.
+        }
+      }
+      equalizerNodesRef.current = [];
+    }
+
+    const settings = options.equalizer;
+    const active = isEqualizerActive(settings);
+    const bands = equalizerBandsForMode(settings.mode);
+    const gains = settings.gains[settings.mode];
+    const nodes = bands.map((band, index) => {
+      const node = context.createBiquadFilter();
+      node.type = "peaking";
+      node.frequency.value = band.frequency;
+      node.Q.value = equalizerModeQ[settings.mode];
+      node.gain.value = active ? gains[index] ?? 0 : 0;
+      return node;
+    });
+
+    let chainTail: AudioNode = source;
+    for (const node of nodes) {
+      chainTail.connect(node);
+      chainTail = node;
+    }
+    chainTail.connect(analyser);
+    equalizerNodesRef.current = nodes;
+  }
+
+  // Push the DSP curve onto the Web Audio biquads (System output mode) and the
+  // mpv audio filters (WASAPI Shared/Exclusive) whenever the settings change.
+  useEffect(() => {
+    const settings = options.equalizer;
+    const active = isEqualizerActive(settings);
+    const gains = settings.gains[settings.mode];
+    for (const [index, node] of equalizerNodesRef.current.entries()) {
+      const rawGain = active ? gains[index] ?? 0 : 0;
+      const nextGain = Number.isFinite(rawGain) ? rawGain : 0;
+      if (Math.abs(node.gain.value - nextGain) < 0.001) continue;
+      node.gain.value = nextGain;
+    }
+  }, [options.equalizer]);
+
+  // Band-layout switch: rewire the chain for the new node count.
+  useEffect(() => {
+    const context = audioContextRef.current;
+    if (!context) return;
+    connectEqualizerChain(context);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options.equalizer.mode]);
+
+  useEffect(() => {
+    const setEqualizer = window.ariaDesktop?.nativeAudio?.setEqualizer;
+    if (!setEqualizer) return;
+    if (!nativePlaybackEnabled) return;
+    setEqualizer({
+      enabled: options.equalizer.enabled,
+      gains: options.equalizer.gains[options.equalizer.mode],
+      frequencies: equalizerBandsForMode(options.equalizer.mode).map((band) => band.frequency),
+      q: equalizerModeQ[options.equalizer.mode],
+    }).catch(() => undefined);
+  }, [nativePlaybackEnabled, options.equalizer]);
+
   useEffect(() => {
     return () => {
       try {
@@ -588,6 +674,14 @@ export function useAudioEngine(options: {
       } catch {
         // Ignore audio graph shutdown errors.
       }
+      for (const node of equalizerNodesRef.current) {
+        try {
+          node.disconnect();
+        } catch {
+          // Ignore audio graph shutdown errors.
+        }
+      }
+      equalizerNodesRef.current = [];
       audioSourceRef.current = null;
       analyserRef.current = null;
       nativeSilenceGainRef.current = null;

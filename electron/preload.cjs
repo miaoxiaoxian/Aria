@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
     setPaused: (paused) => ipcRenderer.invoke("aria:native-audio:pause", Boolean(paused)),
     seek: (position) => ipcRenderer.invoke("aria:native-audio:seek", Number(position) || 0),
     setVolume: (volume) => ipcRenderer.invoke("aria:native-audio:volume", Number(volume) || 0),
+    setEqualizer: (payload) => ipcRenderer.invoke("aria:native-audio:equalizer", payload || {}),
     configure: (payload) => ipcRenderer.invoke("aria:native-audio:configure", payload),
     stop: () => ipcRenderer.invoke("aria:native-audio:stop"),
     onEvent: (callback) => {

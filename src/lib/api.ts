@@ -40,6 +40,12 @@ declare global {
         setPaused?: (paused: boolean) => Promise<unknown>;
         seek?: (position: number) => Promise<unknown>;
         setVolume?: (volume: number) => Promise<unknown>;
+        setEqualizer?: (payload: {
+          enabled?: boolean;
+          gains?: number[];
+          frequencies?: number[];
+          q?: number;
+        }) => Promise<unknown>;
         configure?: (payload: {
           exclusive?: boolean;
           deviceId?: string;

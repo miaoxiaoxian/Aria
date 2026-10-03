@@ -44,6 +44,23 @@ function buildMpvArguments(pipePath) {
   ];
 }
 
+// Builds mpv's audio-filter chain for the DSP equalizer. One peaking biquad
+// per band mirrors the Web Audio graph used by the System output mode; `q`
+// matches the active layout's spacing (18-band wide vs 31-band 1/3 octave).
+function buildEqualizerFilter({ enabled, gains, frequencies, q } = {}) {
+  if (!enabled || !Array.isArray(gains) || !Array.isArray(frequencies)) return "";
+  const width = Number.isFinite(Number(q)) && Number(q) > 0 ? Number(q) : 1;
+  const filters = [];
+  for (let index = 0; index < frequencies.length; index += 1) {
+    const frequency = Number(frequencies[index]);
+    const gain = Number(gains[index] ?? 0);
+    if (!Number.isFinite(frequency) || frequency <= 0) continue;
+    if (!Number.isFinite(gain) || Math.abs(gain) < 0.05) continue;
+    filters.push(`equalizer=f=${frequency}:t=q:w=${width}:g=${gain.toFixed(1)}`);
+  }
+  return filters.join(",");
+}
+
 class MpvAudioEngine {
   constructor({ app, writeLog, sendEvent }) {
     this.app = app;
@@ -65,6 +82,10 @@ class MpvAudioEngine {
     // (so the renderer can re-arm after each seamless advance) live here.
     this.pendingAutoAdvance = null;
     this.cdRipper = new CdAudioRipper({ app, writeLog });
+    // DSP equalizer state, re-applied after every load so the chain survives
+    // track switches, device changes and output recovery.
+    this.equalizerFilter = "";
+    this.equalizerFilterWarning = "";
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -562,6 +583,9 @@ class MpvAudioEngine {
     await this.applyOutputSettings({ exclusive, deviceId, volume });
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
+    await this.applyEqualizerFilter();
+    if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
+
     if (String(url).startsWith("cdda://")) {
       const loadOptions = {};
       if (nativeDevice) loadOptions["cdda-device"] = nativeDevice;
@@ -602,6 +626,40 @@ class MpvAudioEngine {
     return this.snapshot();
   }
 
+  // DSP equalizer for the native (WASAPI) path. The renderer sends the same
+  // band layout it feeds to the Web Audio graph; here it is translated into an
+  // mpv audio-filter chain of peaking biquads.
+  async setEqualizer({ enabled, gains, frequencies, q } = {}) {
+    const filter = buildEqualizerFilter({ enabled, gains, frequencies, q });
+    this.equalizerFilter = filter;
+    if (!this.process || !this.socket || this.socket.destroyed) return this.snapshot();
+    await this.applyEqualizerFilter();
+    return this.snapshot({ kind: "settings" });
+  }
+
+  async applyEqualizerFilter() {
+    if (!this.process || !this.socket || this.socket.destroyed) return;
+    const filter = typeof this.equalizerFilter === "string" ? this.equalizerFilter : "";
+    try {
+      if (!filter) {
+        try {
+          await this.command("af", "clr");
+        } catch {
+          await this.command("af", "set", "");
+        }
+        return;
+      }
+      await this.command("af", "set", filter);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // A build without the biquad filter must not break playback; log once.
+      if (this.equalizerFilterWarning !== message) {
+        this.equalizerFilterWarning = message;
+        this.writeLog("native-audio.log", `equalizer filter rejected: ${message}`);
+      }
+    }
+  }
+
   async recoverOutput(reason = "system-resume") {
     if (!this.process || !this.socket || this.socket.destroyed || !this.state.active) {
       return this.snapshot({ kind: "recover-skipped", reason });
@@ -626,6 +684,9 @@ class MpvAudioEngine {
       }
       await this.command("set_property", "pause", wasPaused);
       this.state.paused = wasPaused;
+      // ao-reload drops the filter chain along with the AO; restore the DSP
+      // curve so a device recovery does not silently disable the equalizer.
+      await this.applyEqualizerFilter();
       this.emit({ kind: "recover", reason });
     } catch (error) {
       this.writeLog("native-audio.log", `recover output failed: ${error?.stack || error}`);

@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { motion } from "framer-motion";
 import {
   Copy,
@@ -14,6 +14,7 @@ import {
   StepBack,
   StepForward,
   SlidersHorizontal,
+  SlidersVertical,
   Volume2,
   X,
 } from "lucide-react";
@@ -51,6 +52,8 @@ export function PlayerSurface({
   onNext,
   onPrevious,
   onOpenImmersive,
+  onOpenEqualizer,
+  equalizerEnabled,
   onReplaceLocalArtwork,
   liked,
   onToggleLike,
@@ -80,6 +83,8 @@ export function PlayerSurface({
   onNext: () => void;
   onPrevious: () => void;
   onOpenImmersive: () => void;
+  onOpenEqualizer: () => void;
+  equalizerEnabled?: boolean;
   onReplaceLocalArtwork: (trackId: string, file: File) => Promise<void>;
   liked: boolean;
   onToggleLike: () => void;
@@ -287,10 +292,22 @@ export function PlayerSurface({
                     </div>
                   )}
                 </div>
-                <Button variant="glass" size="sm" title="打开沉浸视图" onClick={onOpenImmersive}>
-                  <Maximize2 />
-                  沉浸
-                </Button>
+                <div className="flex flex-col items-stretch gap-2">
+                  <Button variant="glass" size="sm" title="打开沉浸视图" onClick={onOpenImmersive}>
+                    <Maximize2 />
+                    沉浸
+                  </Button>
+                  <Button
+                    variant="glass"
+                    size="sm"
+                    title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
+                    onClick={onOpenEqualizer}
+                  >
+                    <SlidersVertical />
+                    <span className={cn(equalizerEnabled && "font-semibold text-neutral-950")}>均衡器</span>
+                    {equalizerEnabled && <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />}
+                  </Button>
+                </div>
               </div>
             </div>
             {activeTrack.id === "idle" ? (

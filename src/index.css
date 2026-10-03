@@ -101,6 +101,75 @@ input[type="range"].player-range::-moz-range-thumb {
   box-shadow: 0 6px 18px rgba(23, 23, 23, 0.18);
 }
 
+/* Vertical DSP equalizer faders. `writing-mode` + `direction` make Chromium
+   lay the native range control out vertically, so the thumb keeps its normal
+   drag behaviour without a rotated wrapper element. */
+input[type="range"].eq-slider {
+  --eq-track-width: 0.4rem;
+  --eq-thumb-size: 1.05rem;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: none;
+  width: var(--eq-thumb-size);
+  height: 8.75rem;
+  margin: 0;
+  background: transparent;
+  color: var(--range-color, #171717);
+  outline: none;
+}
+
+input[type="range"].eq-slider::-webkit-slider-runnable-track {
+  width: var(--eq-track-width);
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(23, 23, 23, 0.12);
+}
+
+input[type="range"].eq-slider::-webkit-slider-thumb {
+  box-sizing: border-box;
+  appearance: none;
+  width: var(--eq-thumb-size);
+  height: var(--eq-thumb-size);
+  margin-inline-start: calc((var(--eq-track-width) - var(--eq-thumb-size)) / 2);
+  border: 3px solid white;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 4px 14px rgba(23, 23, 23, 0.22);
+}
+
+input[type="range"].eq-slider::-moz-range-track {
+  width: var(--eq-track-width);
+  height: 100%;
+  border-radius: 999px;
+  background: rgba(23, 23, 23, 0.12);
+}
+
+input[type="range"].eq-slider::-moz-range-thumb {
+  box-sizing: border-box;
+  width: var(--eq-thumb-size);
+  height: var(--eq-thumb-size);
+  border: 3px solid white;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 4px 14px rgba(23, 23, 23, 0.22);
+}
+
+/* Compact faders for the 31-band layout. */
+input[type="range"].eq-slider.eq-slider-dense {
+  --eq-track-width: 0.28rem;
+  --eq-thumb-size: 0.7rem;
+  width: var(--eq-thumb-size);
+  height: 7.5rem;
+}
+
+input[type="range"].eq-slider.eq-slider-dense::-webkit-slider-thumb {
+  border-width: 2px;
+}
+
+input[type="range"].eq-slider.eq-slider-dense::-moz-range-thumb {
+  border-width: 2px;
+}
+
 button {
   cursor: pointer;
 }

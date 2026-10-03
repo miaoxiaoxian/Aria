@@ -1060,6 +1060,10 @@ ipcMain.handle("aria:native-audio:volume", async (_event, volume) => {
   return getNativeAudioEngine().setVolume(Number(volume) || 0);
 });
 
+ipcMain.handle("aria:native-audio:equalizer", async (_event, payload) => {
+  return getNativeAudioEngine().setEqualizer(payload || {});
+});
+
 ipcMain.handle("aria:native-audio:configure", async (_event, payload) => {
   return getNativeAudioEngine().applyOutputSettings(payload || {});
 });
