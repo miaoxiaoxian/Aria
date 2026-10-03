@@ -241,72 +241,92 @@ export function PlayerSurface({
                 {hifiEnabled && <Badge>HiFi</Badge>}
                 {exclusiveMode && <Badge>直通</Badge>}
               </div>
-              <div className="ml-auto flex items-center gap-2">
-                <div className="relative">
-                  <Button
-                    variant="glass"
-                    size="icon"
-                    aria-label="歌曲选项"
-                    aria-expanded={songOptionsOpen}
-                    title="歌曲选项"
-                    onClick={() => setSongOptionsOpen((open) => !open)}
-                  >
-                    <SlidersHorizontal />
-                  </Button>
-                  {songOptionsOpen && (
-                    <div
-                      className="absolute right-0 top-full z-30 mt-2 w-56 rounded-[1.1rem] border border-white/80 bg-white/92 p-3 shadow-[0_16px_42px_rgba(23,23,23,0.14)] backdrop-blur-2xl"
-                      onPointerDown={(event) => event.stopPropagation()}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-semibold">
-                        <Languages className="size-4 text-neutral-500" />
-                        歌曲选项
-                      </div>
-                      <p className="mt-1 text-xs text-neutral-500">歌词显示</p>
-                      <div className="mt-3 grid grid-cols-2 rounded-xl bg-neutral-950/[0.05] p-1">
-                        <button
-                          className={cn(
-                            "rounded-lg px-2 py-2 text-xs font-semibold transition",
-                            lyricDisplayMode === "original" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
-                          )}
-                          onClick={() => {
-                            onLyricDisplayModeChange("original");
-                            setSongOptionsOpen(false);
-                          }}
-                        >
-                          仅原文
-                        </button>
-                        <button
-                          className={cn(
-                            "rounded-lg px-2 py-2 text-xs font-semibold transition",
-                            lyricDisplayMode === "bilingual" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
-                          )}
-                          onClick={() => {
-                            onLyricDisplayModeChange("bilingual");
-                            setSongOptionsOpen(false);
-                          }}
-                        >
-                          双语
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <div className="ml-auto flex flex-col items-end gap-2">
+                {/* Top row: immersive view stays alone in the top-right corner. */}
                 <Button variant="glass" size="sm" title="打开沉浸视图" onClick={onOpenImmersive}>
                   <Maximize2 />
                   沉浸
                 </Button>
-                <Button
-                  variant="glass"
-                  size="sm"
-                  title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
-                  className={cn(equalizerEnabled && "ring-1 ring-emerald-500/40")}
-                  onClick={onOpenEqualizer}
-                >
-                  <SlidersVertical />
-                  均衡器
-                  {equalizerEnabled && <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />}
-                </Button>
+                {/* Bottom row: song options, the lyric translation switch and the
+                    equalizer sit together. */}
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Button
+                      variant="glass"
+                      size="icon"
+                      aria-label="歌曲选项"
+                      aria-expanded={songOptionsOpen}
+                      title="歌曲选项"
+                      onClick={() => setSongOptionsOpen((open) => !open)}
+                    >
+                      <SlidersHorizontal />
+                    </Button>
+                    {songOptionsOpen && (
+                      <div
+                        className="absolute right-0 top-full z-30 mt-2 w-56 rounded-[1.1rem] border border-white/80 bg-white/92 p-3 shadow-[0_16px_42px_rgba(23,23,23,0.14)] backdrop-blur-2xl"
+                        onPointerDown={(event) => event.stopPropagation()}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-semibold">
+                          <Languages className="size-4 text-neutral-500" />
+                          歌曲选项
+                        </div>
+                        <p className="mt-1 text-xs text-neutral-500">歌词显示</p>
+                        <div className="mt-3 grid grid-cols-2 rounded-xl bg-neutral-950/[0.05] p-1">
+                          <button
+                            className={cn(
+                              "rounded-lg px-2 py-2 text-xs font-semibold transition",
+                              lyricDisplayMode === "original" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
+                            )}
+                            onClick={() => {
+                              onLyricDisplayModeChange("original");
+                              setSongOptionsOpen(false);
+                            }}
+                          >
+                            仅原文
+                          </button>
+                          <button
+                            className={cn(
+                              "rounded-lg px-2 py-2 text-xs font-semibold transition",
+                              lyricDisplayMode === "bilingual" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
+                            )}
+                            onClick={() => {
+                              onLyricDisplayModeChange("bilingual");
+                              setSongOptionsOpen(false);
+                            }}
+                          >
+                            双语
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    variant="glass"
+                    size="sm"
+                    title={
+                      lyricDisplayMode === "bilingual"
+                        ? "歌词显示：双语（点击切回仅原文）"
+                        : "歌词显示：仅原文（点击切到双语）"
+                    }
+                    aria-pressed={lyricDisplayMode === "bilingual"}
+                    className={cn(lyricDisplayMode === "bilingual" && "ring-1 ring-neutral-950/15")}
+                    onClick={() => onLyricDisplayModeChange(lyricDisplayMode === "bilingual" ? "original" : "bilingual")}
+                  >
+                    <Languages />
+                    {lyricDisplayMode === "bilingual" ? "双语" : "原文"}
+                  </Button>
+                  <Button
+                    variant="glass"
+                    size="sm"
+                    title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
+                    className={cn(equalizerEnabled && "ring-1 ring-emerald-500/40")}
+                    onClick={onOpenEqualizer}
+                  >
+                    <SlidersVertical />
+                    均衡器
+                    {equalizerEnabled && <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />}
+                  </Button>
+                </div>
               </div>
             </div>
             {activeTrack.id === "idle" ? (
