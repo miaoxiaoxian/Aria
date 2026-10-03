@@ -38,6 +38,15 @@ import {
 import { sourceLabel } from "@/lib/trackLabels";
 import { usePlaybackTime } from "@/lib/playbackClock";
 import { cn } from "@/lib/utils";
+
+// Header controls are sized to match the track Badge chips (h-7, rounded-full,
+// white/55 fill) so the immersive / equalizer buttons line up with the source,
+// audio-detail and duration chips beside them.
+const playerChipClass =
+  "h-7 gap-1.5 rounded-full border border-white/70 bg-white/55 px-3 text-xs font-medium text-neutral-700 shadow-sm backdrop-blur-xl hover:bg-white/80 [&_svg]:size-3.5";
+const playerChipIconClass =
+  "size-7 rounded-full border border-white/70 bg-white/55 text-neutral-700 shadow-sm backdrop-blur-xl hover:bg-white/80 [&_svg]:size-3.5";
+
 export function PlayerSurface({
   activeTrack,
   palette,
@@ -243,7 +252,13 @@ export function PlayerSurface({
               </div>
               <div className="ml-auto flex flex-col items-end gap-2">
                 {/* Top row: immersive view stays alone in the top-right corner. */}
-                <Button variant="glass" size="sm" title="打开沉浸视图" onClick={onOpenImmersive}>
+                <Button
+                  variant="glass"
+                  size="sm"
+                  className={playerChipClass}
+                  title="打开沉浸视图"
+                  onClick={onOpenImmersive}
+                >
                   <Maximize2 />
                   沉浸
                 </Button>
@@ -253,6 +268,7 @@ export function PlayerSurface({
                     <Button
                       variant="glass"
                       size="icon"
+                      className={cn(playerChipIconClass, songOptionsOpen && "bg-white/85")}
                       aria-label="歌曲选项"
                       aria-expanded={songOptionsOpen}
                       title="歌曲选项"
@@ -303,7 +319,7 @@ export function PlayerSurface({
                     variant="glass"
                     size="sm"
                     title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
-                    className={cn(equalizerEnabled && "ring-1 ring-emerald-500/40")}
+                    className={cn(playerChipClass, equalizerEnabled && "ring-1 ring-emerald-500/40")}
                     onClick={onOpenEqualizer}
                   >
                     <SlidersVertical />
