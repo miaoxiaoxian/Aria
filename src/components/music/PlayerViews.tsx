@@ -247,8 +247,7 @@ export function PlayerSurface({
                   <Maximize2 />
                   沉浸
                 </Button>
-                {/* Bottom row: song options, the lyric translation switch and the
-                    equalizer sit together. */}
+                {/* Bottom row: the song-options icon hugs the equalizer button. */}
                 <div className="flex items-center gap-2">
                   <div className="relative">
                     <Button
@@ -300,21 +299,6 @@ export function PlayerSurface({
                       </div>
                     )}
                   </div>
-                  <Button
-                    variant="glass"
-                    size="sm"
-                    title={
-                      lyricDisplayMode === "bilingual"
-                        ? "歌词显示：双语（点击切回仅原文）"
-                        : "歌词显示：仅原文（点击切到双语）"
-                    }
-                    aria-pressed={lyricDisplayMode === "bilingual"}
-                    className={cn(lyricDisplayMode === "bilingual" && "ring-1 ring-neutral-950/15")}
-                    onClick={() => onLyricDisplayModeChange(lyricDisplayMode === "bilingual" ? "original" : "bilingual")}
-                  >
-                    <Languages />
-                    {lyricDisplayMode === "bilingual" ? "双语" : "原文"}
-                  </Button>
                   <Button
                     variant="glass"
                     size="sm"
