@@ -321,7 +321,7 @@ export function PlayerSurface({
                 variant="glass"
                 size="sm"
                 title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
-                className={cn(playerChipClass, equalizerEnabled && "ring-1 ring-emerald-500/40")}
+                className={playerChipClass}
                 onClick={onOpenEqualizer}
               >
                 <SlidersVertical />
