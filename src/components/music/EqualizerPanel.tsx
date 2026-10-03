@@ -35,6 +35,13 @@ function formatGain(gain: number) {
   return `${rounded > 0 ? "+" : ""}${rounded}`;
 }
 
+/** 31-band columns are ~30px wide, so the readout drops the decimal there. */
+function formatGainCompact(gain: number) {
+  const rounded = Math.round(gain);
+  if (rounded === 0) return "0";
+  return `${rounded > 0 ? "+" : ""}${rounded}`;
+}
+
 function gainTone(gain: number) {
   if (gain >= 0.25) return "text-emerald-600";
   if (gain <= -0.25) return "text-rose-500";
@@ -301,15 +308,30 @@ export function EqualizerPanel({
           })}
         </div>
 
-        <div className={cn("mt-5 flex items-end justify-between", dense ? "gap-[2px]" : "gap-1 sm:gap-2", !settings.enabled && "opacity-45")}>
+        <div
+          className={cn(
+            "mt-5 flex items-end justify-between",
+            dense ? "gap-[2px]" : "gap-1 sm:gap-2",
+            !settings.enabled && "opacity-45",
+          )}
+        >
           {bands.map((band, index) => {
             const gain = gains[index] ?? 0;
             const dragging = draggingBand === index;
             const showLabel = !dense || index % 3 === 0 || index === bands.length - 1;
             return (
               <div key={band.frequency} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                <span className={cn("font-semibold tabular-nums", dense ? "text-[0.55rem]" : "text-[0.7rem]", gainTone(gain))}>
-                  {formatGain(gain)}
+                {/* Fixed-height readout and frequency rows keep every fader on
+                    one line, with or without a printed frequency label. */}
+                <span
+                  title={`${band.label} Hz：${formatGain(gain)} dB`}
+                  className={cn(
+                    "flex h-4 items-center justify-center overflow-hidden whitespace-nowrap font-semibold leading-none tabular-nums",
+                    dense ? "text-[0.55rem]" : "text-[0.7rem]",
+                    gainTone(gain),
+                  )}
+                >
+                  {dense ? formatGainCompact(gain) : formatGain(gain)}
                 </span>
                 <div className={cn("relative flex items-center justify-center", dense ? "h-[7.5rem]" : "h-[8.75rem]")}>
                   <span className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-neutral-950/10" />
@@ -329,7 +351,12 @@ export function EqualizerPanel({
                     style={{ color: dragging ? "#171717" : "#525252" }}
                   />
                 </div>
-                <span className={cn("font-medium text-neutral-500", dense ? "text-[0.5rem]" : "text-[0.7rem]")}>
+                <span
+                  className={cn(
+                    "flex h-3 items-center justify-center overflow-hidden whitespace-nowrap font-medium leading-none text-neutral-500",
+                    dense ? "text-[0.5rem]" : "text-[0.7rem]",
+                  )}
+                >
                   {showLabel ? band.label : ""}
                 </span>
               </div>
