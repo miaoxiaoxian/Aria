@@ -87,6 +87,20 @@ declare global {
       };
       updateTaskbarPlayback?: (payload: { title?: string; artist?: string; playing?: boolean }) => Promise<boolean>;
       setTaskbarPreviewRect?: (rect: { x: number; y: number; width: number; height: number } | null) => Promise<boolean>;
+      exportEqualizerFile?: (payload: { content: string; defaultName?: string }) => Promise<{
+        ok: boolean;
+        canceled?: boolean;
+        path?: string;
+        error?: string;
+      }>;
+      importEqualizerFile?: () => Promise<{
+        ok: boolean;
+        canceled?: boolean;
+        path?: string;
+        name?: string;
+        content?: string;
+        error?: string;
+      }>;
       setTaskbarIconicThumb?: (pixels: Uint8ClampedArray, width: number, height: number) => Promise<boolean>;
       setTaskbarIconicLive?: (pixels: Uint8ClampedArray, width: number, height: number) => Promise<boolean>;
       clearTaskbarIconicThumb?: () => Promise<boolean>;

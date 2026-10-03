@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
-import { AudioLines, RotateCcw, X } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { AudioLines, BookmarkPlus, Download, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import {
+  buildEqualizerExportFileName,
+  buildEqualizerExportPayload,
+  buildGraphicEqText,
   detectEqualizerPreset,
   equalizerBandsForMode,
   equalizerGainRange,
@@ -14,10 +17,13 @@ import {
   equalizerSummary,
   flatEqualizerGains,
   isFlatEqualizer,
+  parseEqualizerImport,
   presetGainsForMode,
+  upsertEqualizerPreset,
   withEqualizerBand,
   withEqualizerGains,
   withEqualizerMode,
+  type EqualizerCustomPreset,
   type EqualizerMode,
   type EqualizerSettings,
 } from "@/lib/equalizer";
@@ -37,17 +43,26 @@ function gainTone(gain: number) {
 export function EqualizerPanel({
   settings,
   onChange,
+  presets,
+  onPresetsChange,
   onClose,
   nativePlaybackEnabled,
   audioOutputMode,
 }: {
   settings: EqualizerSettings;
   onChange: (next: EqualizerSettings) => void;
+  presets: EqualizerCustomPreset[];
+  onPresetsChange: (next: EqualizerCustomPreset[]) => void;
   onClose: () => void;
   nativePlaybackEnabled: boolean;
   audioOutputMode: "system" | "shared" | "exclusive";
 }) {
   const [draggingBand, setDraggingBand] = useState<number | null>(null);
+  const [presetName, setPresetName] = useState("");
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
   const bands = useMemo(() => equalizerBandsForMode(settings.mode), [settings.mode]);
   const gains = settings.gains[settings.mode];
   const activePreset = detectEqualizerPreset(settings);
@@ -55,11 +70,117 @@ export function EqualizerPanel({
   const processingPath = nativePlaybackEnabled
     ? `mpv 滤镜 · WASAPI ${audioOutputMode === "exclusive" ? "独占" : "共享"}`
     : "浏览器实时滤波 · 系统音频";
+  const customPresets = presets.filter((preset) => preset.mode === settings.mode);
+  const otherPresetCount = presets.length - customPresets.length;
 
   const applyPreset = (presetId: string) => {
     const preset = equalizerPresets.find((item) => item.id === presetId);
     if (!preset) return;
     onChange({ ...settings, enabled: true, ...withEqualizerGains(settings, presetGainsForMode(preset, settings.mode)) });
+  };
+
+  const applyCustomPreset = (preset: EqualizerCustomPreset) => {
+    onChange({ enabled: true, mode: preset.mode, gains: { ...settings.gains, [preset.mode]: preset.gains.slice() } });
+    setStatus(`已应用自定义预设「${preset.name}」`);
+  };
+
+  const saveCustomPreset = () => {
+    const name = presetName.trim();
+    if (!name) {
+      setStatus("请先输入预设名称");
+      nameInputRef.current?.focus();
+      return;
+    }
+    onPresetsChange(upsertEqualizerPreset(presets, name, settings));
+    setPresetName("");
+    setStatus(`已把当前 ${equalizerModeLabels[settings.mode]} 曲线保存为「${name}」`);
+  };
+
+  const exportSettings = async (kind: "json" | "graphiceq") => {
+    const bridge = window.ariaDesktop;
+    if (kind === "json" && !bridge?.exportEqualizerFile) {
+      setStatus("导出需要桌面版环境");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (kind === "graphiceq") {
+        const text = buildGraphicEqText(settings);
+        await navigator.clipboard?.writeText(text).catch(() => undefined);
+        const payload = {
+          content: `${text}\n`,
+          defaultName: buildEqualizerExportFileName("aria-graphiceq").replace(/\.json$/, ".txt"),
+        };
+        const result = await bridge?.exportEqualizerFile?.(payload);
+        setStatus(
+          result?.ok
+            ? `已导出 GraphicEQ 文本 → ${result.path}（同时已复制到剪贴板）`
+            : result?.canceled
+              ? "已取消导出"
+              : `导出失败：${result?.error ?? "未知错误"}`,
+        );
+        return;
+      }
+      const payload = {
+        content: `${JSON.stringify(buildEqualizerExportPayload(settings, presets), null, 2)}\n`,
+        defaultName: buildEqualizerExportFileName(),
+      };
+      const result = await bridge?.exportEqualizerFile?.(payload);
+      setStatus(
+        result?.ok
+          ? `已导出 ${presets.length} 组自定义预设 + 两套曲线 → ${result.path}`
+          : result?.canceled
+            ? "已取消导出"
+            : `导出失败：${result?.error ?? "未知错误"}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importFile = async () => {
+    const bridge = window.ariaDesktop;
+    if (!bridge?.importEqualizerFile) {
+      setStatus("导入需要桌面版环境");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await bridge.importEqualizerFile();
+      if (!result?.ok) {
+        setStatus(result?.canceled ? "已取消导入" : `导入失败：${result?.error ?? "未知错误"}`);
+        return;
+      }
+      const parsed = parseEqualizerImport(result.content ?? "", settings.mode);
+      let nextSettings = settings;
+      let mergedPresets = presets;
+      let detail = "";
+
+      if (parsed.settings) {
+        nextSettings = parsed.settings;
+        detail = `已导入两套曲线（当前 ${equalizerModeLabels[parsed.settings.mode]}）`;
+      } else if (parsed.curve) {
+        nextSettings = {
+          enabled: true,
+          mode: parsed.curve.mode,
+          gains: { ...settings.gains, [parsed.curve.mode]: parsed.curve.gains },
+        };
+        detail = `已应用${parsed.sourceLabel}`;
+      }
+
+      if (parsed.presets.length) {
+        mergedPresets = [...parsed.presets, ...presets.filter((preset) =>
+          !parsed.presets.some((incoming) => incoming.mode === preset.mode && incoming.name === preset.name))];
+        onPresetsChange(mergedPresets);
+        detail = detail ? `${detail}，并合并 ${parsed.presets.length} 组自定义预设` : `已导入 ${parsed.presets.length} 组自定义预设`;
+      }
+
+      if (nextSettings !== settings) onChange(nextSettings);
+      const warning = parsed.warnings.length ? `（${parsed.warnings.join("；")}）` : "";
+      setStatus(`${detail || `来自 ${result.name ?? "文件"}：${parsed.sourceLabel || "无可用数据"}`}${warning}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -74,15 +195,12 @@ export function EqualizerPanel({
           </div>
           <p className="mt-1 text-xs leading-5 text-neutral-500">{processingPath}</p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="subtle" size="icon" aria-label="关闭均衡器面板" onClick={onClose}>
-            <X />
-          </Button>
-        </div>
+        <Button variant="subtle" size="icon" aria-label="关闭均衡器面板" onClick={onClose}>
+          <X />
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">
-        {/* Enable switch + band-layout switch */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[1.1rem] bg-neutral-950/[0.035] px-3 py-2.5">
           <div className="flex items-center gap-3">
             <button
@@ -131,7 +249,6 @@ export function EqualizerPanel({
           </div>
         </div>
 
-        {/* Presets for the active layout */}
         <div className="mt-4 flex flex-wrap gap-2">
           {equalizerPresets.map((preset) => {
             const active = activePreset?.id === preset.id;
@@ -152,34 +269,51 @@ export function EqualizerPanel({
               </button>
             );
           })}
-          {!activePreset && (
+          {!activePreset && !customPresets.some((preset) => (
+            preset.gains.length === gains.length && preset.gains.every((gain, index) => gain === gains[index])
+          )) && (
             <span className="rounded-full bg-neutral-950/[0.055] px-3 py-1.5 text-xs font-semibold text-neutral-500">
               自定义
             </span>
           )}
+          {customPresets.map((preset) => {
+            const active = preset.gains.length === gains.length && preset.gains.every((gain, index) => gain === gains[index]);
+            return (
+              <span
+                key={preset.id}
+                className={cn(
+                  "flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition",
+                  active ? "bg-emerald-600 text-white shadow-sm" : "bg-emerald-500/12 text-emerald-700",
+                )}
+              >
+                <button type="button" title={`应用「${preset.name}」`} onClick={() => applyCustomPreset(preset)}>
+                  {preset.name}
+                </button>
+                <button
+                  type="button"
+                  title="删除该预设"
+                  aria-label={`删除预设 ${preset.name}`}
+                  className="rounded-full p-0.5 transition hover:bg-black/10"
+                  onClick={() => {
+                    onPresetsChange(presets.filter((item) => item.id !== preset.id));
+                    setStatus(`已删除预设「${preset.name}」`);
+                  }}
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            );
+          })}
         </div>
 
-        {/* Faders */}
-        <div
-          className={cn(
-            "mt-5 flex items-end justify-between",
-            dense ? "gap-[2px]" : "gap-1 sm:gap-2",
-            !settings.enabled && "opacity-45",
-          )}
-        >
+        <div className={cn("mt-5 flex items-end justify-between", dense ? "gap-[2px]" : "gap-1 sm:gap-2", !settings.enabled && "opacity-45")}>
           {bands.map((band, index) => {
             const gain = gains[index] ?? 0;
             const dragging = draggingBand === index;
             const showLabel = !dense || index % 3 === 0 || index === bands.length - 1;
             return (
               <div key={band.frequency} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                <span
-                  className={cn(
-                    "font-semibold tabular-nums",
-                    dense ? "text-[0.55rem]" : "text-[0.7rem]",
-                    gainTone(gain),
-                  )}
-                >
+                <span className={cn("font-semibold tabular-nums", dense ? "text-[0.55rem]" : "text-[0.7rem]", gainTone(gain))}>
                   {formatGain(gain)}
                 </span>
                 <div className={cn("relative flex items-center justify-center", dense ? "h-[7.5rem]" : "h-[8.75rem]")}>
@@ -210,9 +344,7 @@ export function EqualizerPanel({
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="text-xs leading-5 text-neutral-500">
-            {activePreset
-              ? `当前预设：${activePreset.label} —— ${activePreset.description}`
-              : "已手动调整频段，音效实时生效"}
+            {activePreset ? `当前预设：${activePreset.label} —— ${activePreset.description}` : "已手动调整频段，音效实时生效"}
             {settings.enabled && isFlatEqualizer(settings) ? "（所有频段 0dB，听感等同关闭）" : ""}
           </p>
           <Button
@@ -225,10 +357,56 @@ export function EqualizerPanel({
           </Button>
         </div>
 
-        <p className="mt-3 text-[0.7rem] leading-relaxed text-neutral-400">
-          18 段与 31 段各自保存一套曲线，切换频段不会丢失调整。系统音频模式由浏览器实时滤波，WASAPI 共享/独占模式通过 mpv 的 equalizer
-          滤镜处理同一套曲线，切换输出模式时会自动重新应用。
-        </p>
+        {/* Custom preset library + file import/export */}
+        <div className="mt-4 rounded-[1.1rem] border border-neutral-950/8 bg-white/70 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-neutral-600">自定义预设与文件</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="subtle" size="sm" onClick={() => void importFile()} disabled={busy}>
+                <Upload />
+                导入文件
+              </Button>
+              <Button variant="subtle" size="sm" onClick={() => void exportSettings("json")} disabled={busy}>
+                <Download />
+                导出 JSON
+              </Button>
+              <Button variant="subtle" size="sm" onClick={() => void exportSettings("graphiceq")} disabled={busy}>
+                <Download />
+                导出 GraphicEQ
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              ref={nameInputRef}
+              value={presetName}
+              onChange={(event) => setPresetName(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") saveCustomPreset();
+              }}
+              placeholder={`给当前 ${equalizerModeLabels[settings.mode]} 曲线起个名字`}
+              maxLength={40}
+              className="min-w-[12rem] flex-1 rounded-xl border border-neutral-950/10 bg-white/85 px-3 py-1.5 text-xs text-neutral-700 outline-none placeholder:text-neutral-400 focus:border-neutral-950/25"
+            />
+            <Button variant="subtle" size="sm" onClick={saveCustomPreset}>
+              <BookmarkPlus />
+              保存为预设
+            </Button>
+          </div>
+
+          <p className="mt-2 text-[0.7rem] leading-relaxed text-neutral-400">
+            {presets.length
+              ? `共 ${presets.length} 组自定义预设（当前频段 ${customPresets.length} 组${otherPresetCount ? `，另一频段 ${otherPresetCount} 组` : ""}）`
+              : "还没有自定义预设；保存后会以绿色标签出现在上方预设行。"}
+            {" "}导入支持本插件导出的 JSON，也兼容 GraphicEQ 文本、频点+增益的文本或纯数值列表；18/31 段各自保存一套曲线，切换频段不会丢失调整。
+          </p>
+          {status && (
+            <p className="mt-2 break-all text-[0.7rem] leading-relaxed text-neutral-600" role="status">
+              {status}
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );

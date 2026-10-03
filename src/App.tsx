@@ -47,7 +47,14 @@ import {
   type QualityLevel,
 } from "@/lib/playerPresentation";
 import { commitPlaybackTime, getPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
-import { readCachedEqualizerSettings, writeCachedEqualizerSettings, type EqualizerSettings } from "@/lib/equalizer";
+import {
+  readCachedEqualizerPresets,
+  readCachedEqualizerSettings,
+  writeCachedEqualizerPresets,
+  writeCachedEqualizerSettings,
+  type EqualizerCustomPreset,
+  type EqualizerSettings,
+} from "@/lib/equalizer";
 import { materializeQueueIds, mergeQueueTrackSources, orderedQueueIds, playableTracks } from "@/lib/playQueue";
 import { matchesShortcut, readKeyboardShortcuts, writeKeyboardShortcuts, type KeyboardShortcuts } from "@/lib/keyboardShortcuts";
 import { sourceLabel } from "@/lib/trackLabels";
@@ -144,6 +151,7 @@ export default function App() {
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
   const [audioOutputMode, setAudioOutputMode] = useState<AudioOutputMode>(() => readCachedAudioSettings().outputMode ?? "system");
   const [equalizer, setEqualizer] = useState<EqualizerSettings>(readCachedEqualizerSettings);
+  const [equalizerPresets, setEqualizerPresets] = useState<EqualizerCustomPreset[]>(readCachedEqualizerPresets);
   const [equalizerOpen, setEqualizerOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -780,6 +788,10 @@ export default function App() {
   useEffect(() => {
     writeCachedEqualizerSettings(equalizer);
   }, [equalizer]);
+
+  useEffect(() => {
+    writeCachedEqualizerPresets(equalizerPresets);
+  }, [equalizerPresets]);
 
   useEffect(() => {
     const updateTaskbarPlayback = window.ariaDesktop?.updateTaskbarPlayback;
@@ -2141,6 +2153,8 @@ export default function App() {
               <EqualizerPanel
                 settings={equalizer}
                 onChange={setEqualizer}
+                presets={equalizerPresets}
+                onPresetsChange={setEqualizerPresets}
                 onClose={() => setEqualizerOpen(false)}
                 nativePlaybackEnabled={nativePlaybackEnabled}
                 audioOutputMode={audioOutputMode}

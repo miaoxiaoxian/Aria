@@ -1064,6 +1064,56 @@ ipcMain.handle("aria:native-audio:equalizer", async (_event, payload) => {
   return getNativeAudioEngine().setEqualizer(payload || {});
 });
 
+// Equalizer preset files: the renderer builds the payload, the main process
+// owns the native save/open dialogs and the disk write.
+ipcMain.handle("aria:equalizer-export", async (_event, payload) => {
+  try {
+    const content = typeof payload?.content === "string" ? payload.content : "";
+    if (!content) return { ok: false, error: "没有可导出的内容" };
+    const defaultName = typeof payload?.defaultName === "string" && payload.defaultName
+      ? payload.defaultName
+      : "aria-equalizer.json";
+    const result = await dialog.showSaveDialog(mainWindow ?? undefined, {
+      title: "导出均衡器设置",
+      defaultPath: path.join(app.getPath("documents"), defaultName),
+      filters: [
+        { name: "均衡器预设 (JSON)", extensions: ["json"] },
+        { name: "全部文件", extensions: ["*"] },
+      ],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(result.filePath, content, "utf8");
+    writeLog("desktop.log", `equalizer exported: ${result.filePath}`);
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    writeLog("desktop.log", `equalizer export failed: ${error?.message || error}`);
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
+ipcMain.handle("aria:equalizer-import", async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      title: "导入均衡器设置",
+      properties: ["openFile"],
+      filters: [
+        { name: "均衡器预设", extensions: ["json", "txt", "eq", "csv"] },
+        { name: "全部文件", extensions: ["*"] },
+      ],
+    });
+    const filePath = result.canceled ? null : result.filePaths[0];
+    if (!filePath) return { ok: false, canceled: true };
+    const stats = fs.statSync(filePath);
+    if (stats.size > 2 * 1024 * 1024) return { ok: false, error: "文件过大（限制 2MB）" };
+    const content = fs.readFileSync(filePath, "utf8");
+    writeLog("desktop.log", `equalizer imported: ${filePath}`);
+    return { ok: true, path: filePath, name: path.basename(filePath), content };
+  } catch (error) {
+    writeLog("desktop.log", `equalizer import failed: ${error?.message || error}`);
+    return { ok: false, error: error?.message || String(error) };
+  }
+});
+
 ipcMain.handle("aria:native-audio:configure", async (_event, payload) => {
   return getNativeAudioEngine().applyOutputSettings(payload || {});
 });

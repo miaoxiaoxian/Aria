@@ -288,3 +288,242 @@ export function buildMpvEqualizerFilter(settings: EqualizerSettings) {
     .map(({ band, gain }) => `equalizer=f=${band.frequency}:t=q:w=${q}:g=${gain.toFixed(1)}`);
   return filters.join(",");
 }
+
+// --- Custom preset library and file import/export --------------------------
+
+export type EqualizerCustomPreset = {
+  id: string;
+  name: string;
+  /** Layout the curve was saved for. */
+  mode: EqualizerMode;
+  gains: number[];
+  createdAt: number;
+};
+
+export const equalizerFileVersion = 1;
+const equalizerPresetsKey = "aria-equalizer-presets";
+/** Preset anchors used when a 10-value list has to be spread over a layout. */
+const octaveAnchorFrequencies = presetAnchorFrequencies;
+
+export function createEqualizerPresetId() {
+  return `eq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeCustomPresets(value: unknown): EqualizerCustomPreset[] {
+  if (!Array.isArray(value)) return [];
+  const presets: EqualizerCustomPreset[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as { id?: unknown; name?: unknown; mode?: unknown; gains?: unknown; createdAt?: unknown };
+    const mode: EqualizerMode = candidate.mode === "18" ? "18" : "31";
+    const name = typeof candidate.name === "string" ? candidate.name.trim().slice(0, 40) : "";
+    if (!name) continue;
+    presets.push({
+      id: typeof candidate.id === "string" && candidate.id ? candidate.id : createEqualizerPresetId(),
+      name,
+      mode,
+      gains: normalizeGainsForMode(candidate.gains, mode),
+      createdAt: typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now(),
+    });
+  }
+  return presets;
+}
+
+export function readCachedEqualizerPresets(): EqualizerCustomPreset[] {
+  try {
+    const raw = window.localStorage.getItem(equalizerPresetsKey);
+    if (!raw) return [];
+    return normalizeCustomPresets(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+export function writeCachedEqualizerPresets(presets: EqualizerCustomPreset[]) {
+  try {
+    window.localStorage.setItem(equalizerPresetsKey, JSON.stringify(presets));
+  } catch {
+    // The preset library is best-effort.
+  }
+}
+
+/** Saves (or overwrites by name) a custom preset for the active layout. */
+export function upsertEqualizerPreset(
+  presets: EqualizerCustomPreset[],
+  name: string,
+  settings: EqualizerSettings,
+): EqualizerCustomPreset[] {
+  const trimmed = name.trim().slice(0, 40);
+  if (!trimmed) return presets;
+  const entry: EqualizerCustomPreset = {
+    id: createEqualizerPresetId(),
+    name: trimmed,
+    mode: settings.mode,
+    gains: settings.gains[settings.mode].slice(),
+    createdAt: Date.now(),
+  };
+  const existing = presets.find((preset) => preset.mode === entry.mode && preset.name === trimmed);
+  if (!existing) return [entry, ...presets];
+  return presets.map((preset) => (preset.id === existing.id ? { ...entry, id: existing.id } : preset));
+}
+
+export function buildEqualizerExportPayload(settings: EqualizerSettings, presets: EqualizerCustomPreset[]) {
+  return {
+    format: "aria-equalizer",
+    version: equalizerFileVersion,
+    exportedAt: new Date().toISOString(),
+    enabled: settings.enabled,
+    activeMode: settings.mode,
+    curves: {
+      "18": settings.gains["18"].slice(),
+      "31": settings.gains["31"].slice(),
+    },
+    presets,
+  };
+}
+
+export function buildEqualizerExportFileName(prefix = "aria-equalizer") {
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  return `${prefix}-${stamp}.json`;
+}
+
+/** GraphicEQ text (Equalizer APO style) for interop with other EQ software. */
+export function buildGraphicEqText(settings: EqualizerSettings) {
+  const bands = equalizerBandsForMode(settings.mode);
+  const gains = settings.gains[settings.mode];
+  const pairs = bands.map((band, index) => `${band.frequency} ${(gains[index] ?? 0).toFixed(1)}`);
+  return `GraphicEQ: ${pairs.join("; ")}`;
+}
+
+export type EqualizerImportResult = {
+  format: "aria" | "graphiceq" | "text-list";
+  sourceLabel: string;
+  /** Full configuration when the file carried both curves. */
+  settings: EqualizerSettings | null;
+  /** A single curve recovered from a text/GraphicEQ file. */
+  curve: { mode: EqualizerMode; gains: number[] } | null;
+  presets: EqualizerCustomPreset[];
+  warnings: string[];
+};
+
+function parseFrequencyGainPairs(text: string) {
+  const pairs: Array<{ frequency: number; gain: number }> = [];
+  const regex =
+    /(?<freq>\d+(?:[.,]\d+)?)\s*(?<kilo>k)?\s*(?:hz)?\s*(?:[:=,;]|\s)\s*(?<gain>-?\d+(?:[.,]\d+)?)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    const groups = match.groups ?? {};
+    const rawFrequency = Number((groups.freq ?? "").replace(",", "."));
+    const gain = Number((groups.gain ?? "").replace(",", "."));
+    if (!Number.isFinite(rawFrequency) || !Number.isFinite(gain)) continue;
+    const frequency = groups.kilo ? rawFrequency * 1000 : rawFrequency;
+    if (frequency < 10 || frequency > 24000) continue;
+    if (Math.abs(gain) > 40) continue;
+    pairs.push({ frequency, gain });
+  }
+  return pairs;
+}
+
+/** Maps arbitrary (frequency, gain) pairs onto a band layout (log-frequency). */
+function curveFromPairs(pairs: Array<{ frequency: number; gain: number }>, mode: EqualizerMode) {
+  const sorted = [...pairs].sort((a, b) => a.frequency - b.frequency);
+  const bands = equalizerBandsForMode(mode);
+  return bands.map((band) => {
+    if (sorted.length === 0) return 0;
+    if (band.frequency <= sorted[0].frequency) return clampGain(sorted[0].gain);
+    const last = sorted[sorted.length - 1];
+    if (band.frequency >= last.frequency) return clampGain(last.gain);
+    for (let index = 0; index < sorted.length - 1; index += 1) {
+      const low = sorted[index];
+      const high = sorted[index + 1];
+      if (band.frequency < low.frequency || band.frequency > high.frequency) continue;
+      const ratio =
+        (Math.log(band.frequency) - Math.log(low.frequency)) / (Math.log(high.frequency) - Math.log(low.frequency));
+      return clampGain(low.gain + (high.gain - low.gain) * ratio);
+    }
+    return 0;
+  });
+}
+
+function curveFromOctaveValues(values: number[], mode: EqualizerMode) {
+  const pairs = octaveAnchorFrequencies.map((frequency, index) => ({
+    frequency,
+    gain: Number(values[index] ?? 0),
+  }));
+  return curveFromPairs(pairs, mode);
+}
+
+/**
+ * Reads an exported Aria file, a GraphicEQ line, or a plain text/number list.
+ * Unknown shapes degrade to a warning instead of throwing.
+ */
+export function parseEqualizerImport(content: string, activeMode: EqualizerMode): EqualizerImportResult {
+  const result: EqualizerImportResult = {
+    format: "text-list",
+    sourceLabel: "",
+    settings: null,
+    curve: null,
+    presets: [],
+    warnings: [],
+  };
+  const trimmed = content.trim();
+  if (!trimmed) {
+    result.warnings.push("文件内容为空");
+    return result;
+  }
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        format?: unknown;
+        curves?: { "18"?: unknown; "31"?: unknown };
+        activeMode?: unknown;
+        enabled?: unknown;
+        presets?: unknown;
+      };
+      const mode: EqualizerMode = parsed.activeMode === "18" ? "18" : "31";
+      result.format = "aria";
+      result.sourceLabel = "Aria 均衡器文件";
+      result.settings = {
+        enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : true,
+        mode,
+        gains: {
+          "18": normalizeGainsForMode(parsed.curves?.["18"], "18"),
+          "31": normalizeGainsForMode(parsed.curves?.["31"], "31"),
+        },
+      };
+      result.presets = normalizeCustomPresets(parsed.presets);
+      return result;
+    } catch {
+      result.warnings.push("JSON 解析失败，按文本继续尝试");
+    }
+  }
+
+  const pairs = parseFrequencyGainPairs(trimmed);
+  if (pairs.length >= 3) {
+    const isGraphicEq = /graphiceq/i.test(trimmed);
+    result.format = isGraphicEq ? "graphiceq" : "text-list";
+    result.curve = { mode: activeMode, gains: curveFromPairs(pairs, activeMode) };
+    result.sourceLabel = isGraphicEq
+      ? `GraphicEQ 曲线（识别到 ${pairs.length} 个频点）`
+      : `文本频点曲线（识别到 ${pairs.length} 个频点）`;
+    return result;
+  }
+
+  const numbers = (trimmed.match(/-?\d+(?:[.,]\d+)?/g) ?? []).map((value) => Number(value.replace(",", ".")));
+  const usable = numbers.filter((value) => Number.isFinite(value) && Math.abs(value) <= 40);
+  if (usable.length === 18 || usable.length === 31) {
+    const mode: EqualizerMode = usable.length === 18 ? "18" : "31";
+    result.curve = { mode, gains: normalizeGainsForMode(usable, mode) };
+    result.sourceLabel = `纯数值列表（${usable.length} 段）`;
+    return result;
+  }
+  if (usable.length === 10) {
+    result.curve = { mode: activeMode, gains: curveFromOctaveValues(usable, activeMode) };
+    result.sourceLabel = "10 段数值列表（插值到当前频段）";
+    return result;
+  }
+
+  result.warnings.push("没有识别到可用的频点或增益数据");
+  return result;
+}

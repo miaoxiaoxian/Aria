@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   chooseMusicFolder: () => ipcRenderer.invoke("aria:choose-music-folder"),
   updateTaskbarPlayback: (payload) => ipcRenderer.invoke("aria:update-taskbar-playback", payload || {}),
   setTaskbarPreviewRect: (rect) => ipcRenderer.invoke("aria:set-thumbnail-clip", rect || null),
+  exportEqualizerFile: (payload) => ipcRenderer.invoke("aria:equalizer-export", payload || {}),
+  importEqualizerFile: () => ipcRenderer.invoke("aria:equalizer-import"),
   setTaskbarIconicThumb: nativeIconicThumbnailEnabled
     ? (pixels, width, height) => ipcRenderer.invoke("aria:set-iconic-thumbnail", pixels, width, height)
     : undefined,
