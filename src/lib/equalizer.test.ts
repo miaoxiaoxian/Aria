@@ -9,6 +9,7 @@ import {
   equalizerPresets,
   parseEqualizerImport,
   presetGainsForMode,
+  presetsFromImport,
   upsertEqualizerPreset,
   withEqualizerBand,
   withEqualizerGains,
@@ -169,5 +170,43 @@ describe("custom preset library", () => {
     const library = upsertEqualizerPreset(upsertEqualizerPreset([], "同名", wide), "同名", dense);
     expect(library).toHaveLength(2);
     expect(library.map((preset) => preset.mode).sort()).toEqual(["18", "31"]);
+  });
+
+  it("never lets a custom preset shadow the built-in 平直 baseline", () => {
+    const flat = settingsWith("31", new Array(31).fill(0));
+    const library = upsertEqualizerPreset([], "平直", flat);
+    expect(library[0].name).toBe("平直 · 自定义");
+    // The built-in preset itself stays the all-zero baseline.
+    expect(equalizerPresets.find((preset) => preset.label === "平直")?.anchors.every((gain) => gain === 0)).toBe(true);
+  });
+});
+
+describe("import keeps the working curve untouched", () => {
+  it("turns a curves-only file into named presets for both layouts", () => {
+    const settings = settingsWith("31", [4, ...new Array(30).fill(0)]);
+    const payload = buildEqualizerExportPayload(settings, []);
+    const parsed = parseEqualizerImport(JSON.stringify(payload), "31");
+    const presets = presetsFromImport(parsed, "hd600 to he1.json");
+
+    expect(presets).toHaveLength(2);
+    expect(presets.map((preset) => preset.name)).toEqual(["hd600 to he1 (18 段)", "hd600 to he1 (31 段)"]);
+    expect(presets.find((preset) => preset.mode === "31")?.gains[0]).toBe(4);
+  });
+
+  it("keeps presets that the file already carries", () => {
+    const settings = settingsWith("18", [1, ...new Array(17).fill(0)]);
+    const payload = buildEqualizerExportPayload(settings, [
+      { id: "p1", name: "我的低音", mode: "18", gains: settings.gains["18"], createdAt: 1 },
+    ]);
+    const presets = presetsFromImport(parseEqualizerImport(JSON.stringify(payload), "31"), "x.json");
+    expect(presets.map((preset) => preset.name)).toEqual(["我的低音"]);
+  });
+
+  it("turns a GraphicEQ file into a single preset named after the file", () => {
+    const parsed = parseEqualizerImport("GraphicEQ: 20 6; 1000 -3; 20000 2", "31");
+    const presets = presetsFromImport(parsed, "curve.txt");
+    expect(presets).toHaveLength(1);
+    expect(presets[0].name).toBe("curve (31 段)");
+    expect(presets[0].mode).toBe("31");
   });
 });

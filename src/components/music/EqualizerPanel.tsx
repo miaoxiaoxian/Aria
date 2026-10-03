@@ -19,6 +19,7 @@ import {
   isFlatEqualizer,
   parseEqualizerImport,
   presetGainsForMode,
+  presetsFromImport,
   upsertEqualizerPreset,
   withEqualizerBand,
   withEqualizerGains,
@@ -152,32 +153,26 @@ export function EqualizerPanel({
         return;
       }
       const parsed = parseEqualizerImport(result.content ?? "", settings.mode);
-      let nextSettings = settings;
-      let mergedPresets = presets;
-      let detail = "";
-
-      if (parsed.settings) {
-        nextSettings = parsed.settings;
-        detail = `已导入两套曲线（当前 ${equalizerModeLabels[parsed.settings.mode]}）`;
-      } else if (parsed.curve) {
-        nextSettings = {
-          enabled: true,
-          mode: parsed.curve.mode,
-          gains: { ...settings.gains, [parsed.curve.mode]: parsed.curve.gains },
-        };
-        detail = `已应用${parsed.sourceLabel}`;
-      }
-
-      if (parsed.presets.length) {
-        mergedPresets = [...parsed.presets, ...presets.filter((preset) =>
-          !parsed.presets.some((incoming) => incoming.mode === preset.mode && incoming.name === preset.name))];
-        onPresetsChange(mergedPresets);
-        detail = detail ? `${detail}，并合并 ${parsed.presets.length} 组自定义预设` : `已导入 ${parsed.presets.length} 组自定义预设`;
-      }
-
-      if (nextSettings !== settings) onChange(nextSettings);
+      const incoming = presetsFromImport(parsed, result.name ?? "");
       const warning = parsed.warnings.length ? `（${parsed.warnings.join("；")}）` : "";
-      setStatus(`${detail || `来自 ${result.name ?? "文件"}：${parsed.sourceLabel || "无可用数据"}`}${warning}`);
+
+      if (!incoming.length) {
+        setStatus(`没有可导入的预设：${parsed.sourceLabel || "文件里没有曲线或频点数据"}${warning}`);
+        return;
+      }
+
+      // Importing only extends the preset library; the working curve (and the
+      // all-zero 平直 baseline) stays exactly as it is until a preset is applied.
+      const merged = [
+        ...incoming,
+        ...presets.filter(
+          (preset) => !incoming.some((item) => item.mode === preset.mode && item.name === preset.name),
+        ),
+      ];
+      onPresetsChange(merged);
+      setStatus(
+        `已导入 ${incoming.length} 组预设：${incoming.map((preset) => preset.name).join("、")}。当前曲线未改动，点预设名即可套用。${warning}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -399,7 +394,7 @@ export function EqualizerPanel({
             {presets.length
               ? `共 ${presets.length} 组自定义预设（当前频段 ${customPresets.length} 组${otherPresetCount ? `，另一频段 ${otherPresetCount} 组` : ""}）`
               : "还没有自定义预设；保存后会以绿色标签出现在上方预设行。"}
-            {" "}导入支持本插件导出的 JSON，也兼容 GraphicEQ 文本、频点+增益的文本或纯数值列表；18/31 段各自保存一套曲线，切换频段不会丢失调整。
+            {" "}导入只往预设库里加标签，**不会改动当前曲线**（内置「平直」始终是全 0，点预设名才会套用）。支持本插件导出的 JSON，也兼容 GraphicEQ 文本、频点+增益的文本或纯数值列表；18/31 段各自保存一套曲线。
           </p>
           {status && (
             <p className="mt-2 break-all text-[0.7rem] leading-relaxed text-neutral-600" role="status">

@@ -309,6 +309,18 @@ export function createEqualizerPresetId() {
   return `eq-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+const builtInPresetLabels = new Set(equalizerPresets.map((preset) => preset.label));
+
+/**
+ * Built-in presets (notably 平直, the all-zero baseline) always keep their own
+ * names, so a saved or imported custom preset can never shadow them.
+ */
+function avoidBuiltInPresetName(name: string) {
+  const trimmed = name.trim().slice(0, 40);
+  if (!trimmed) return trimmed;
+  return builtInPresetLabels.has(trimmed) ? `${trimmed} · 自定义` : trimmed;
+}
+
 function normalizeCustomPresets(value: unknown): EqualizerCustomPreset[] {
   if (!Array.isArray(value)) return [];
   const presets: EqualizerCustomPreset[] = [];
@@ -316,7 +328,7 @@ function normalizeCustomPresets(value: unknown): EqualizerCustomPreset[] {
     if (!entry || typeof entry !== "object") continue;
     const candidate = entry as { id?: unknown; name?: unknown; mode?: unknown; gains?: unknown; createdAt?: unknown };
     const mode: EqualizerMode = candidate.mode === "18" ? "18" : "31";
-    const name = typeof candidate.name === "string" ? candidate.name.trim().slice(0, 40) : "";
+    const name = typeof candidate.name === "string" ? avoidBuiltInPresetName(candidate.name) : "";
     if (!name) continue;
     presets.push({
       id: typeof candidate.id === "string" && candidate.id ? candidate.id : createEqualizerPresetId(),
@@ -353,7 +365,7 @@ export function upsertEqualizerPreset(
   name: string,
   settings: EqualizerSettings,
 ): EqualizerCustomPreset[] {
-  const trimmed = name.trim().slice(0, 40);
+  const trimmed = avoidBuiltInPresetName(name);
   if (!trimmed) return presets;
   const entry: EqualizerCustomPreset = {
     id: createEqualizerPresetId(),
@@ -526,4 +538,36 @@ export function parseEqualizerImport(content: string, activeMode: EqualizerMode)
 
   result.warnings.push("没有识别到可用的频点或增益数据");
   return result;
+}
+
+/**
+ * Turns an imported file into custom presets. Importing never overwrites the
+ * working curve: a file that only carries curves becomes named presets, and
+ * the built-in 平直 baseline keeps its all-zero curve until a preset is
+ * applied by hand.
+ */
+export function presetsFromImport(result: EqualizerImportResult, fileLabel: string): EqualizerCustomPreset[] {
+  if (result.presets.length) return result.presets;
+  const label = fileLabel.replace(/\.[^.]+$/, "").trim().slice(0, 30) || "导入预设";
+  if (result.settings) {
+    return equalizerModes.map((mode) => ({
+      id: createEqualizerPresetId(),
+      name: avoidBuiltInPresetName(`${label} (${equalizerModeLabels[mode]})`),
+      mode,
+      gains: result.settings!.gains[mode].slice(),
+      createdAt: Date.now(),
+    }));
+  }
+  if (result.curve) {
+    return [
+      {
+        id: createEqualizerPresetId(),
+        name: avoidBuiltInPresetName(`${label} (${equalizerModeLabels[result.curve.mode]})`),
+        mode: result.curve.mode,
+        gains: result.curve.gains.slice(),
+        createdAt: Date.now(),
+      },
+    ];
+  }
+  return [];
 }
