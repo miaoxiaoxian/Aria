@@ -242,6 +242,8 @@ export function PlayerSurface({
           style={{ background: `linear-gradient(160deg, rgba(255,255,255,0.36), ${themeSoft} 48%, ${themeSecondary})` }}
         >
           <div className="min-h-0">
+            {/* Row 1: track chips and the immersive button share one line so they
+                sit at exactly the same height. */}
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge>{sourceLabel[activeTrack.source]}</Badge>
@@ -250,84 +252,82 @@ export function PlayerSurface({
                 {hifiEnabled && <Badge>HiFi</Badge>}
                 {exclusiveMode && <Badge>直通</Badge>}
               </div>
-              <div className="ml-auto flex flex-col items-end gap-2">
-                {/* Top row: immersive view stays alone in the top-right corner. */}
+              <Button
+                variant="glass"
+                size="sm"
+                className={cn(playerChipClass, "ml-auto")}
+                title="打开沉浸视图"
+                onClick={onOpenImmersive}
+              >
+                <Maximize2 />
+                沉浸
+              </Button>
+            </div>
+            {/* Row 2: the song-options icon hugs the equalizer, right-aligned so
+                the equalizer sits directly below the immersive button. */}
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <div className="relative">
                 <Button
                   variant="glass"
-                  size="sm"
-                  className={playerChipClass}
-                  title="打开沉浸视图"
-                  onClick={onOpenImmersive}
+                  size="icon"
+                  className={cn(playerChipIconClass, songOptionsOpen && "bg-white/85")}
+                  aria-label="歌曲选项"
+                  aria-expanded={songOptionsOpen}
+                  title="歌曲选项"
+                  onClick={() => setSongOptionsOpen((open) => !open)}
                 >
-                  <Maximize2 />
-                  沉浸
+                  <SlidersHorizontal />
                 </Button>
-                {/* Bottom row: the song-options icon hugs the equalizer button. */}
-                <div className="flex items-center gap-2">
-                  <div className="relative">
-                    <Button
-                      variant="glass"
-                      size="icon"
-                      className={cn(playerChipIconClass, songOptionsOpen && "bg-white/85")}
-                      aria-label="歌曲选项"
-                      aria-expanded={songOptionsOpen}
-                      title="歌曲选项"
-                      onClick={() => setSongOptionsOpen((open) => !open)}
-                    >
-                      <SlidersHorizontal />
-                    </Button>
-                    {songOptionsOpen && (
-                      <div
-                        className="absolute right-0 top-full z-30 mt-2 w-56 rounded-[1.1rem] border border-white/80 bg-white/92 p-3 shadow-[0_16px_42px_rgba(23,23,23,0.14)] backdrop-blur-2xl"
-                        onPointerDown={(event) => event.stopPropagation()}
-                      >
-                        <div className="flex items-center gap-2 text-sm font-semibold">
-                          <Languages className="size-4 text-neutral-500" />
-                          歌曲选项
-                        </div>
-                        <p className="mt-1 text-xs text-neutral-500">歌词显示</p>
-                        <div className="mt-3 grid grid-cols-2 rounded-xl bg-neutral-950/[0.05] p-1">
-                          <button
-                            className={cn(
-                              "rounded-lg px-2 py-2 text-xs font-semibold transition",
-                              lyricDisplayMode === "original" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
-                            )}
-                            onClick={() => {
-                              onLyricDisplayModeChange("original");
-                              setSongOptionsOpen(false);
-                            }}
-                          >
-                            仅原文
-                          </button>
-                          <button
-                            className={cn(
-                              "rounded-lg px-2 py-2 text-xs font-semibold transition",
-                              lyricDisplayMode === "bilingual" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
-                            )}
-                            onClick={() => {
-                              onLyricDisplayModeChange("bilingual");
-                              setSongOptionsOpen(false);
-                            }}
-                          >
-                            双语
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <Button
-                    variant="glass"
-                    size="sm"
-                    title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
-                    className={cn(playerChipClass, equalizerEnabled && "ring-1 ring-emerald-500/40")}
-                    onClick={onOpenEqualizer}
+                {songOptionsOpen && (
+                  <div
+                    className="absolute right-0 top-full z-30 mt-2 w-56 rounded-[1.1rem] border border-white/80 bg-white/92 p-3 shadow-[0_16px_42px_rgba(23,23,23,0.14)] backdrop-blur-2xl"
+                    onPointerDown={(event) => event.stopPropagation()}
                   >
-                    <SlidersVertical />
-                    均衡器
-                    {equalizerEnabled && <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />}
-                  </Button>
-                </div>
+                    <div className="flex items-center gap-2 text-sm font-semibold">
+                      <Languages className="size-4 text-neutral-500" />
+                      歌曲选项
+                    </div>
+                    <p className="mt-1 text-xs text-neutral-500">歌词显示</p>
+                    <div className="mt-3 grid grid-cols-2 rounded-xl bg-neutral-950/[0.05] p-1">
+                      <button
+                        className={cn(
+                          "rounded-lg px-2 py-2 text-xs font-semibold transition",
+                          lyricDisplayMode === "original" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
+                        )}
+                        onClick={() => {
+                          onLyricDisplayModeChange("original");
+                          setSongOptionsOpen(false);
+                        }}
+                      >
+                        仅原文
+                      </button>
+                      <button
+                        className={cn(
+                          "rounded-lg px-2 py-2 text-xs font-semibold transition",
+                          lyricDisplayMode === "bilingual" ? "bg-neutral-950 text-white shadow-sm" : "text-neutral-500 hover:text-neutral-950",
+                        )}
+                        onClick={() => {
+                          onLyricDisplayModeChange("bilingual");
+                          setSongOptionsOpen(false);
+                        }}
+                      >
+                        双语
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
+              <Button
+                variant="glass"
+                size="sm"
+                title={equalizerEnabled ? "DSP 均衡器（已开启）" : "打开 DSP 均衡器"}
+                className={cn(playerChipClass, equalizerEnabled && "ring-1 ring-emerald-500/40")}
+                onClick={onOpenEqualizer}
+              >
+                <SlidersVertical />
+                均衡器
+                {equalizerEnabled && <span className="size-1.5 rounded-full bg-emerald-500" aria-hidden />}
+              </Button>
             </div>
             {activeTrack.id === "idle" ? (
               <div className="mt-6 rounded-[1.25rem] border border-white/70 bg-white/55 p-5 shadow-sm">
