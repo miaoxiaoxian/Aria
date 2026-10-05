@@ -508,7 +508,9 @@ export function ImmersivePlayerView({
 }) {
   const currentTime = usePlaybackTime();
   const resolvedDuration = durationSeconds || parseDuration(activeTrack.duration);
-  const progressFraction = resolvedDuration ? Math.min(1, Math.max(0, currentTime / resolvedDuration)) : 0;
+  const seekInput = useThrottledSeekInput(onSeek);
+  const immersiveTime = seekInput.dragValue ?? Math.min(currentTime, resolvedDuration || currentTime || 0);
+  const progressFraction = resolvedDuration ? Math.min(1, Math.max(0, immersiveTime / resolvedDuration)) : 0;
   const lyricLines = activeTrack.lyrics.length ? activeTrack.lyrics : [{ time: "00:00", text: "暂无歌词" }];
   const activeLyricIndex = getActiveLyricIndex(lyricLines, currentTime);
   const immersiveLyricLines = lyricLines.slice(Math.max(0, activeLyricIndex - 2), Math.min(lyricLines.length, activeLyricIndex + 5));
@@ -605,8 +607,12 @@ export function ImmersivePlayerView({
             type="range"
             min="0"
             max={Math.max(1, resolvedDuration || 0)}
-            value={Math.min(currentTime, resolvedDuration || currentTime || 0)}
-            onChange={(event) => onSeek(Number(event.target.value))}
+            value={immersiveTime}
+            onChange={(event) => seekInput.onChange(Number(event.target.value))}
+            onPointerUp={seekInput.onRelease}
+            onPointerCancel={seekInput.onRelease}
+            onKeyUp={seekInput.onRelease}
+            onBlur={seekInput.onRelease}
             className="player-range mt-3 w-full"
             style={
               {
@@ -616,7 +622,7 @@ export function ImmersivePlayerView({
             }
           />
           <div className="mt-2 flex items-center justify-between text-xs font-medium text-white/54">
-            <span>{formatDuration(currentTime)}</span>
+            <span>{formatDuration(immersiveTime)}</span>
             <span>{formatDuration(resolvedDuration)}</span>
           </div>
           <div className="mt-5 flex items-center justify-center gap-3">
@@ -636,6 +642,63 @@ export function ImmersivePlayerView({
   );
 }
 
+// Native (exclusive WASAPI) playback flushes the decoder and re-arms the audio
+// device on every seek, so a progress drag that emits one seek per pointer move
+// produces audible stutter and can stall mpv's own clock. This hook keeps the
+// handle following the pointer locally while throttling real seeks, and always
+// commits the final position on release.
+function useThrottledSeekInput(onSeek: (time: number) => void) {
+  const [dragValue, setDragValue] = useState<number | null>(null);
+  const lastSeekAtRef = useRef(0);
+  const pendingRef = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const flush = () => {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    if (pending == null) return;
+    lastSeekAtRef.current = performance.now();
+    onSeek(pending);
+  };
+
+  const requestSeek = (value: number) => {
+    const now = performance.now();
+    const sinceLast = now - lastSeekAtRef.current;
+    if (sinceLast >= 250) {
+      lastSeekAtRef.current = now;
+      onSeek(value);
+      return;
+    }
+    pendingRef.current = value;
+    if (timerRef.current != null) return;
+    timerRef.current = window.setTimeout(flush, 250 - sinceLast);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const release = () => {
+    flush();
+    setDragValue(null);
+  };
+
+  return {
+    dragValue,
+    onChange: (value: number) => {
+      setDragValue(value);
+      requestSeek(value);
+    },
+    onRelease: release,
+  };
+}
+
 function PlaybackProgress({
   palette,
   durationSeconds,
@@ -649,7 +712,10 @@ function PlaybackProgress({
 }) {
   const currentTime = usePlaybackTime();
   const resolvedDuration = durationSeconds || parseDuration(activeTrack.duration);
-  const progressFraction = resolvedDuration ? Math.min(1, Math.max(0, currentTime / resolvedDuration)) : 0;
+  const seekInput = useThrottledSeekInput(onSeek);
+
+  const displayedTime = seekInput.dragValue ?? Math.min(currentTime, resolvedDuration || currentTime || 0);
+  const displayedFraction = resolvedDuration ? Math.min(1, Math.max(0, displayedTime / resolvedDuration)) : 0;
 
   return (
     <div className="mt-3">
@@ -658,18 +724,22 @@ function PlaybackProgress({
         type="range"
         min="0"
         max={Math.max(1, resolvedDuration || 0)}
-        value={Math.min(currentTime, resolvedDuration || currentTime || 0)}
-        onChange={(event) => onSeek(Number(event.target.value))}
+        value={displayedTime}
+        onChange={(event) => seekInput.onChange(Number(event.target.value))}
+        onPointerUp={seekInput.onRelease}
+        onPointerCancel={seekInput.onRelease}
+        onKeyUp={seekInput.onRelease}
+        onBlur={seekInput.onRelease}
         className="player-range w-full"
         style={
           {
             "--range-color": palette.primary,
-            "--range-value": progressFraction,
+            "--range-value": displayedFraction,
           } as CSSProperties
         }
       />
       <div className="mt-2 flex items-center justify-between text-xs font-medium text-neutral-500">
-        <span>{formatDuration(currentTime)}</span>
+        <span>{formatDuration(displayedTime)}</span>
         <span>{formatDuration(resolvedDuration)}</span>
       </div>
     </div>

@@ -88,6 +88,9 @@ class MpvAudioEngine {
     this.equalizerFilterWarning = "";
     // 1 Hz position poll that keeps the renderer's progress clock alive.
     this.progressTimer = null;
+    // Seek coalescing: while a seek is running, only the newest target is kept.
+    this.pendingSeekTarget = null;
+    this.seekInFlight = false;
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -263,7 +266,10 @@ class MpvAudioEngine {
       if (!this.process || !this.socket || this.socket.destroyed) return;
       this.command("get_property", "time-pos")
         .then((value) => {
-          // No file loaded (mpv idle) reports null; nothing to publish then.
+          // mpv answers null while no file is loaded or while it swaps files
+          // (a seek can trigger that). Number(null) is 0, so this guard is what
+          // stops the heartbeat from resetting the UI clock to the beginning.
+          if (value == null) return;
           const position = Number(value);
           if (!Number.isFinite(position) || position < 0) return;
           this.state.position = position;
@@ -309,10 +315,13 @@ class MpvAudioEngine {
     }
 
     if (message.event === "property-change") {
-      if (message.name === "time-pos") this.state.position = Number(message.data) || 0;
-      if (message.name === "duration") this.state.duration = Number(message.data) || 0;
+      // mpv reports null for these while it swaps files (a seek can trigger a
+      // swap). Treating null as 0 used to reset the renderer's progress bar to
+      // the beginning mid-playback, so null now keeps the last known value.
+      if (message.name === "time-pos" && message.data != null) this.state.position = Number(message.data) || 0;
+      if (message.name === "duration" && message.data != null) this.state.duration = Number(message.data) || 0;
       if (message.name === "pause") this.state.paused = Boolean(message.data);
-      if (message.name === "audio-bitrate") this.state.bitrate = Number(message.data) || null;
+      if (message.name === "audio-bitrate" && message.data != null) this.state.bitrate = Number(message.data) || null;
       if (message.name === "audio-exclusive") this.state.exclusive = Boolean(message.data);
       if (message.name === "audio-device" && typeof message.data === "string") this.state.deviceId = message.data;
       this.emit({ kind: "progress" });
@@ -648,24 +657,40 @@ class MpvAudioEngine {
     await this.ensureProcess();
     const nextPosition = Math.max(0, Number(position) || 0);
     this.state.position = nextPosition;
+    this.pendingSeekTarget = nextPosition;
+    // A progress-bar drag fires a seek per pointer move. In exclusive mode
+    // every one of those flushes the decoder and re-arms the AO, which stalls
+    // playback (audible stutter) and can freeze mpv's own audio clock. Running
+    // one seek at a time and always jumping to the newest target collapses a
+    // burst into at most a couple of real seeks.
+    if (this.seekInFlight) return this.snapshot();
+    this.seekInFlight = true;
     try {
-      await this.command("seek", nextPosition, "absolute+exact");
-    } catch (error) {
-      // Exclusive-mode endpoints and non-seekable streams can reject an exact
-      // seek; fall back to a keyframe seek instead of silently doing nothing.
-      this.writeLog("native-audio.log", `exact seek ${nextPosition.toFixed(1)}s failed: ${error?.message || error}`);
-      await this.command("seek", nextPosition, "absolute").catch(() => undefined);
+      while (this.pendingSeekTarget != null) {
+        const target = this.pendingSeekTarget;
+        this.pendingSeekTarget = null;
+        try {
+          await this.command("seek", target, "absolute+exact");
+        } catch (error) {
+          // Exclusive-mode endpoints and non-seekable streams can reject an
+          // exact seek; fall back to a keyframe seek instead of doing nothing.
+          this.writeLog("native-audio.log", `exact seek ${target.toFixed(1)}s failed: ${error?.message || error}`);
+          await this.command("seek", target, "absolute").catch(() => undefined);
+        }
+        // Re-arm the position observer and read the position straight back: if
+        // the seek made mpv reload the file or reclock the AO, this is what
+        // keeps the renderer's progress clock alive.
+        await this.command("observe_property", 1, "time-pos").catch(() => undefined);
+        const reported = await this.command("get_property", "time-pos").catch(() => null);
+        if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) {
+          this.state.position = reported;
+        }
+        this.writeLog("native-audio.log", `seek -> ${target.toFixed(1)}s, mpv reports ${this.state.position.toFixed(1)}s`);
+        this.emit({ kind: "seek" });
+      }
+    } finally {
+      this.seekInFlight = false;
     }
-    // Re-arm the position observer and read the position straight back: if the
-    // seek made mpv reload the file or reclock the AO, this is what keeps the
-    // renderer's progress clock alive.
-    await this.command("observe_property", 1, "time-pos").catch(() => undefined);
-    const reported = await this.command("get_property", "time-pos").catch(() => null);
-    if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) {
-      this.state.position = reported;
-    }
-    this.writeLog("native-audio.log", `seek -> ${nextPosition.toFixed(1)}s, mpv reports ${this.state.position.toFixed(1)}s`);
-    this.emit({ kind: "seek" });
     return this.snapshot();
   }
 

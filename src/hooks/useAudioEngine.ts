@@ -203,19 +203,45 @@ export function useAudioEngine(options: {
     if (!nativePlaybackEnabled) return;
     const nativeAudio = window.ariaDesktop?.nativeAudio;
     let stalledReported = false;
+    let lastUnstickAt = 0;
+    // A native seek can stall mpv's own audio clock while the device buffer
+    // keeps draining; project at most this far past the last reported position
+    // so the UI never freezes, without inventing minutes of playback.
+    const driftCap = 5;
 
     const interpolate = window.setInterval(() => {
       const clock = nativeClockRef.current;
       if (!options.playing || !clock.playing) return;
       const now = performance.now();
-      // A stream that stopped advancing must not keep projecting forward.
-      if (now - clock.advancedAt > 2500) return;
       const elapsed = (now - clock.at) / 1000;
-      if (elapsed <= 0 || elapsed > 5) return;
+      if (elapsed <= 0) return;
+      const stalled = now - clock.advancedAt > 2500;
+      if (elapsed > (stalled ? driftCap : 5)) return;
       const total = options.durationSeconds > 0 ? options.durationSeconds : 0;
       const projected = clock.position + elapsed;
       commitPlaybackTime(total > 0 ? Math.min(projected, total) : projected);
     }, 500);
+
+    // If the engine keeps reporting the same position while playback is
+    // supposed to be running, cycle the pause flag once to unstick mpv's clock.
+    const unstick = window.setInterval(() => {
+      const clock = nativeClockRef.current;
+      if (!options.playing || !clock.playing) return;
+      const now = performance.now();
+      if (now - clock.advancedAt < 3500) return;
+      if (now - lastUnstickAt < 8000) return;
+      lastUnstickAt = now;
+      window.ariaDesktop?.log?.({
+        level: "warn",
+        source: "audio.unstick",
+        message: "native clock stalled; cycling pause to recover",
+        context: { position: clock.position },
+      }).catch(() => undefined);
+      nativeAudio?.setPaused?.(true).catch(() => undefined);
+      window.setTimeout(() => {
+        nativeAudio?.setPaused?.(false).catch(() => undefined);
+      }, 150);
+    }, 1500);
 
     const watchdog = window.setInterval(() => {
       const clock = nativeClockRef.current;
@@ -246,6 +272,7 @@ export function useAudioEngine(options: {
 
     return () => {
       window.clearInterval(interpolate);
+      window.clearInterval(unstick);
       window.clearInterval(watchdog);
     };
   }, [nativePlaybackEnabled, options.playing, options.durationSeconds]);
