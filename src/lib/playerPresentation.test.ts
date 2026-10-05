@@ -41,20 +41,23 @@ describe("playerPresentation", () => {
     expect(detail).toContain("44.1kHz");
   });
 
-  it("labels DSD sources by their 1-bit rate instead of PCM numbers", () => {
+  it("labels DSD sources by tier, bitrate and 1-bit rate instead of PCM numbers", () => {
     const dsd = {
       quality: "Hi-Res",
-      bitrate: null,
+      bitrate: 5_644_800,
       sampleRate: 2_822_400,
       format: "DSD",
       currentLevel: null,
     } as Parameters<typeof formatAudioDetail>[0];
 
-    expect(formatAudioDetail(dsd)).toBe("DSD64 · 2.8MHz");
-    expect(formatAudioDetail({ ...dsd, sampleRate: 5_644_800 })).toBe("DSD128 · 5.6MHz");
-    expect(formatAudioDetail({ ...dsd, sampleRate: 11_289_600 })).toBe("DSD256 · 11.3MHz");
+    expect(formatAudioDetail(dsd)).toBe("DSD64 · 5645k · 2.8MHz");
+    expect(formatAudioDetail({ ...dsd, bitrate: 11_289_600, sampleRate: 5_644_800 })).toBe("DSD128 · 11290k · 5.6MHz");
+    expect(formatAudioDetail({ ...dsd, bitrate: 22_579_200, sampleRate: 11_289_600 })).toBe("DSD256 · 22579k · 11.3MHz");
+    expect(formatAudioDetail({ ...dsd, bitrate: 5_644_800, sampleRate: 2_822_400 }, undefined, false)).toBe(
+      "DSD64 · 5645 kbps · 2.8MHz",
+    );
     // An unknown DSD rate must never fall back to printing a PCM sample rate.
-    expect(formatAudioDetail({ ...dsd, sampleRate: null })).toBe("DSD");
+    expect(formatAudioDetail({ ...dsd, bitrate: null, sampleRate: null })).toBe("DSD");
     // Ordinary PCM tracks keep the previous detail string.
     const pcm = {
       quality: "Lossless",

@@ -411,25 +411,32 @@ export function formatSampleRate(value?: number | null, compact = false) {
 }
 
 /**
- * DSD sources report their 1-bit rate (DSD64 = 2.8224 MHz), which must not be
- * rendered as a PCM sample rate. Returns null for ordinary PCM tracks.
+ * DSD sources report their 1-bit rate (DSD64 = 2.8224 MHz) and a matching
+ * bitrate (5645 kbps for DSD64 stereo). Neither is a PCM number, so the label
+ * names the DSD tier instead of rendering "2822.4kHz". Returns null for
+ * ordinary PCM tracks.
  */
-export function formatDsdDetail(sampleRate?: number | null, format?: string | null) {
-  const isDsdFormat = format === "DSD" || format === "DSF" || format === "DFF";
-  if (sampleRate == null && !isDsdFormat) return null;
+export function formatDsdDetail(
+  track: { sampleRate?: number | null; format?: string | null; bitrate?: number | null },
+  compact = true,
+) {
+  const isDsdFormat = track.format === "DSD" || track.format === "DSF" || track.format === "DFF";
+  if (track.sampleRate == null && !isDsdFormat) return null;
   const labels = new Map<number, string>([
     [2_822_400, "DSD64"],
     [5_644_800, "DSD128"],
     [11_289_600, "DSD256"],
     [22_579_200, "DSD512"],
   ]);
-  const label = sampleRate != null ? labels.get(sampleRate) : undefined;
-  if (!label) return isDsdFormat ? "DSD" : null;
-  return `${label} · ${(sampleRate / 1_000_000).toFixed(1)}MHz`;
+  const tier = track.sampleRate != null ? labels.get(track.sampleRate) : undefined;
+  if (!tier && !isDsdFormat) return null;
+  const bitrate = formatBitrate(track.bitrate, compact);
+  const rate = track.sampleRate ? `${(track.sampleRate / 1_000_000).toFixed(1)}MHz` : null;
+  return [tier ?? "DSD", bitrate, rate].filter(Boolean).join(" · ");
 }
 
 export function formatAudioDetail(track: Track, level?: QualityLevel, compact = true) {
-  const dsd = formatDsdDetail(track.sampleRate, track.format);
+  const dsd = formatDsdDetail(track, compact);
   if (dsd) return dsd;
   const resolvedLevel = track.currentLevel ?? level ?? null;
   const qualityLabel = resolvedLevel ? qualityLevelLabels[resolvedLevel] : track.quality;

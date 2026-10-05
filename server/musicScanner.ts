@@ -166,6 +166,13 @@ async function collectAudioFiles(dir: string): Promise<string[]> {
 
 type DsdHeader = { sampleRate: number; channels: number; durationSeconds: number | null };
 
+/** DSD is 1 bit per sample per channel: DSD64 stereo = 5 644 800 bps. */
+function dsdBitrate(sampleRate: number | null, channels: number) {
+  if (!sampleRate || !Number.isFinite(sampleRate)) return null;
+  const resolvedChannels = Number.isFinite(channels) && channels > 0 ? channels : 2;
+  return quantizeBitrate(sampleRate * resolvedChannels);
+}
+
 /**
  * Minimal DSF / DSDIFF (DFF) header reader. DSD files stay indexable and
  * playable even when the tag parser cannot read them, so the essential numbers
@@ -276,9 +283,15 @@ async function readTrackMetadata(filePath: string, libraryRoot: string): Promise
     }),
     format: isDsd ? "DSD" : format?.container || extension.slice(1).toUpperCase(),
     size: fileSize,
-    // A DSD "bitrate" (11 Mbps for DSD128) is meaningless next to PCM numbers;
-    // the UI shows the DSD64/128/256 label instead.
-    bitrate: isDsd ? null : typeof format?.bitrate === "number" ? quantizeBitrate(format.bitrate) : null,
+    // DSD carries 1 bit per sample per channel, so the bitrate is rate ×
+    // channels (DSD64 stereo = 5645 kbps). Keep it: it is the number other
+    // players show, and the UI pairs it with the DSD64/128/256 tier.
+    bitrate: isDsd
+      ? dsdBitrate(sampleRate, format?.numberOfChannels ?? dsdHeader?.channels ?? 2) ??
+        (typeof format?.bitrate === "number" ? quantizeBitrate(format.bitrate) : null)
+      : typeof format?.bitrate === "number"
+        ? quantizeBitrate(format.bitrate)
+        : null,
     sampleRate,
     bpm: null,
     hasCover: Boolean(common?.picture?.length),
