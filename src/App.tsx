@@ -1640,7 +1640,7 @@ export default function App() {
           const file = files[0];
           const path = file?.webkitRelativePath || file?.name || "";
           const absolutePath = (file as (File & { path?: string }) | undefined)?.path;
-          const audioFiles = files.filter((item) => /\.(flac|alac|wav|ape|m4a|aac|mp3|ogg|opus|wma|aiff?)$/i.test(item.name));
+          const audioFiles = files.filter((item) => /\.(flac|alac|wav|ape|m4a|aac|mp3|ogg|opus|wma|aiff?|dsf|dff)$/i.test(item.name));
           setOnboardingLocalInfo({
             path: absolutePath || (path ? path.split(/[\\/]/)[0] : "已选择本地音乐"),
             count: audioFiles.length || files.length,

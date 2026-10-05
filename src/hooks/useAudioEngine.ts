@@ -50,12 +50,12 @@ export function useAudioEngine(options: {
   // mpv (native WASAPI) owns the audible stream for the Shared/Exclusive
   // output modes. In the "system" mode Chromium plays the stream itself so
   // the OS media session is a real, audible session (full artwork + prev/next
-  // in the Windows media card); only tracks that require native decoding
-  // (CD, exotic containers) still fall back to mpv.
+  // in the Windows media card). Tracks that Chromium cannot decode (audio CD,
+  // DSD) always go through mpv no matter which mode is selected.
   const nativePlaybackRequested = Boolean(
     nativeAudioSupported &&
-      options.audioOutputMode !== "system" &&
-      (activeTrack.streamUrl || activeTrack.requiresNativePlayback),
+      (activeTrack.requiresNativePlayback ||
+        (options.audioOutputMode !== "system" && Boolean(activeTrack.streamUrl))),
   );
   const nativePlaybackEnabled = Boolean(nativePlaybackRequested && !nativePlaybackFailed);
 

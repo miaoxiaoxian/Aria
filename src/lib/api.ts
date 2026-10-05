@@ -144,6 +144,8 @@ export type ApiScannedTrack = {
   size: number;
   bitrate?: number | null;
   sampleRate?: number | null;
+  /** Source container label, e.g. "FLAC", "DSD". */
+  format?: string | null;
   bpm?: number | null;
   hasCover?: boolean;
   trackNumber?: number | null;

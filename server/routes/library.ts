@@ -191,7 +191,10 @@ export function createLibraryRouter() {
     try {
       const track = await findTrack(req.params.trackId);
       if (!track) throw new HttpError(404, "Track not found", "TRACK_NOT_FOUND");
-      if (track.requiresNativePlayback || track.mediaKind === "audio-cd") {
+      // Optical-disc tracks have no standalone file to stream. Tracks that only
+      // the native engine can decode (DSD) still stream from here: mpv reads
+      // them over HTTP, the renderer's <audio> element simply never asks.
+      if (track.mediaKind === "audio-cd") {
         throw new HttpError(409, "Track requires native playback", "NATIVE_PLAYBACK_REQUIRED");
       }
 

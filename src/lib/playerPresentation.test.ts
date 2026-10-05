@@ -41,6 +41,31 @@ describe("playerPresentation", () => {
     expect(detail).toContain("44.1kHz");
   });
 
+  it("labels DSD sources by their 1-bit rate instead of PCM numbers", () => {
+    const dsd = {
+      quality: "Hi-Res",
+      bitrate: null,
+      sampleRate: 2_822_400,
+      format: "DSD",
+      currentLevel: null,
+    } as Parameters<typeof formatAudioDetail>[0];
+
+    expect(formatAudioDetail(dsd)).toBe("DSD64 · 2.8MHz");
+    expect(formatAudioDetail({ ...dsd, sampleRate: 5_644_800 })).toBe("DSD128 · 5.6MHz");
+    expect(formatAudioDetail({ ...dsd, sampleRate: 11_289_600 })).toBe("DSD256 · 11.3MHz");
+    // An unknown DSD rate must never fall back to printing a PCM sample rate.
+    expect(formatAudioDetail({ ...dsd, sampleRate: null })).toBe("DSD");
+    // Ordinary PCM tracks keep the previous detail string.
+    const pcm = {
+      quality: "Lossless",
+      bitrate: 1_411_200,
+      sampleRate: 44_100,
+      format: "FLAC",
+      currentLevel: null,
+    } as Parameters<typeof formatAudioDetail>[0];
+    expect(formatAudioDetail(pcm)).toBe("Lossless · 1411k · 44.1kHz");
+  });
+
   it("merges and trims tracks without reordering unique entries", () => {
     const first = { id: "a" } as Parameters<typeof mergeTracks>[0][number];
     const duplicate = { id: "a" } as Parameters<typeof mergeTracks>[0][number];

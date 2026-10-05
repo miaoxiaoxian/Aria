@@ -31,6 +31,8 @@ export type Track = {
   discNumber?: number | null;
   bitrate?: number | null;
   sampleRate?: number | null;
+  /** Source container label, e.g. "FLAC", "DSD". */
+  format?: string | null;
   bpm?: number | null;
   libraryRoot?: string;
   mediaKind?: "file" | "audio-cd";

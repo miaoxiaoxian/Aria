@@ -121,6 +121,7 @@ export function createCachedQueueSnapshots(
     discNumber: track.discNumber ?? null,
     bitrate: track.bitrate ?? null,
     sampleRate: track.sampleRate ?? null,
+    format: track.format ?? null,
     bpm: null,
     libraryRoot: track.libraryRoot,
     mediaKind: track.mediaKind,
@@ -179,6 +180,7 @@ function normalizeTrackSnapshot(value: unknown): Track | undefined {
     discNumber: typeof track.discNumber === "number" ? track.discNumber : null,
     bitrate: typeof track.bitrate === "number" ? track.bitrate : null,
     sampleRate: typeof track.sampleRate === "number" ? track.sampleRate : null,
+    format: typeof track.format === "string" ? track.format : null,
     bpm: null,
     libraryRoot: typeof track.libraryRoot === "string" ? track.libraryRoot : undefined,
     mediaKind: track.mediaKind === "audio-cd" ? "audio-cd" : track.mediaKind === "file" ? "file" : undefined,
@@ -408,7 +410,27 @@ export function formatSampleRate(value?: number | null, compact = false) {
   return compact ? `${rendered}kHz` : `${rendered} kHz`;
 }
 
+/**
+ * DSD sources report their 1-bit rate (DSD64 = 2.8224 MHz), which must not be
+ * rendered as a PCM sample rate. Returns null for ordinary PCM tracks.
+ */
+export function formatDsdDetail(sampleRate?: number | null, format?: string | null) {
+  const isDsdFormat = format === "DSD" || format === "DSF" || format === "DFF";
+  if (sampleRate == null && !isDsdFormat) return null;
+  const labels = new Map<number, string>([
+    [2_822_400, "DSD64"],
+    [5_644_800, "DSD128"],
+    [11_289_600, "DSD256"],
+    [22_579_200, "DSD512"],
+  ]);
+  const label = sampleRate != null ? labels.get(sampleRate) : undefined;
+  if (!label) return isDsdFormat ? "DSD" : null;
+  return `${label} · ${(sampleRate / 1_000_000).toFixed(1)}MHz`;
+}
+
 export function formatAudioDetail(track: Track, level?: QualityLevel, compact = true) {
+  const dsd = formatDsdDetail(track.sampleRate, track.format);
+  if (dsd) return dsd;
   const resolvedLevel = track.currentLevel ?? level ?? null;
   const qualityLabel = resolvedLevel ? qualityLevelLabels[resolvedLevel] : track.quality;
   const bitrate = track.bitrate ? formatBitrate(track.bitrate, compact) : null;
