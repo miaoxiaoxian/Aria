@@ -53,6 +53,7 @@ export function PlayerSurface({
   playing,
   visualizerPlaying,
   visualizerActive,
+  visualizerNote,
   shuffleEnabled,
   repeatMode,
   onTogglePlay,
@@ -84,6 +85,8 @@ export function PlayerSurface({
   playing: boolean;
   visualizerPlaying: boolean;
   visualizerActive: boolean;
+  /** Shown in place of the spectrum when the source cannot be analysed (DSD, CD). */
+  visualizerNote?: string | null;
   shuffleEnabled: boolean;
   repeatMode: "all" | "one";
   onTogglePlay: () => void;
@@ -349,15 +352,22 @@ export function PlayerSurface({
 
           <div className="mt-4">
             <div className="px-1">
-              <SpectrumCanvas
-                analyserRef={analyserRef}
-                playing={visualizerPlaying}
-                active={visualizerActive}
-                palette={palette}
-                fallback={activeTrack.waveform}
-                outputMode={visualizerMode}
-                outputVolume={volume}
-              />
+              <div className="relative">
+                <SpectrumCanvas
+                  analyserRef={analyserRef}
+                  playing={visualizerPlaying}
+                  active={visualizerActive}
+                  palette={palette}
+                  fallback={activeTrack.waveform}
+                  outputMode={visualizerMode}
+                  outputVolume={volume}
+                />
+                {!visualizerActive && visualizerNote && (
+                  <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs font-medium text-neutral-400">
+                    {visualizerNote}
+                  </p>
+                )}
+              </div>
               <PlaybackProgress
                 palette={palette}
                 durationSeconds={durationSeconds}
@@ -485,6 +495,7 @@ export function ImmersivePlayerView({
   visualizerMode,
   volume,
   visualizerActive,
+  visualizerNote,
   onClose,
   onTogglePlay,
   onNext,
@@ -500,6 +511,8 @@ export function ImmersivePlayerView({
   visualizerMode: AudioOutputMode;
   volume: number;
   visualizerActive: boolean;
+  /** Shown in place of the spectrum when the source cannot be analysed (DSD, CD). */
+  visualizerNote?: string | null;
   onClose: () => void;
   onTogglePlay: () => void;
   onNext: () => void;
@@ -593,15 +606,22 @@ export function ImmersivePlayerView({
         </div>
 
         <div className="mx-auto w-full max-w-6xl">
-          <SpectrumCanvas
-            analyserRef={analyserRef}
-            playing={visualizerPlaying}
-            active={visualizerActive}
-            palette={palette}
-            fallback={activeTrack.waveform}
-            outputMode={visualizerMode}
-            outputVolume={volume}
-          />
+          <div className="relative">
+            <SpectrumCanvas
+              analyserRef={analyserRef}
+              playing={visualizerPlaying}
+              active={visualizerActive}
+              palette={palette}
+              fallback={activeTrack.waveform}
+              outputMode={visualizerMode}
+              outputVolume={volume}
+            />
+            {!visualizerActive && visualizerNote && (
+              <p className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs font-medium text-white/45">
+                {visualizerNote}
+              </p>
+            )}
+          </div>
           <input
             aria-label="沉浸播放进度"
             type="range"

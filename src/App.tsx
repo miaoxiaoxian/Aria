@@ -501,6 +501,16 @@ export default function App() {
     ? Boolean(playing || (nativeAudioState?.active && !nativeAudioState.paused))
     : playing;
 
+  // DSD and optical-disc tracks never reach the renderer's analyser (they are
+  // decoded by mpv), so the spectrum would only show synthetic noise. Hide it
+  // and say why instead of animating a fake spectrum.
+  const spectrumUnavailable = activeTrack.requiresNativePlayback === true;
+  const spectrumNote = spectrumUnavailable
+    ? activeTrack.format === "DSD"
+      ? "DSD 原生解码输出 · 无频谱数据"
+      : "光盘音源 · 无频谱数据"
+    : null;
+
   function handleNativeTrackAdvanced(trackId: string) {
     if (!nativePlaybackEnabled || !trackId || trackId === activeTrack.id) return;
 
@@ -1855,6 +1865,7 @@ export default function App() {
                   palette={activePalette}
                   playing={playing}
                   visualizerPlaying={visualizerPlaying}
+                  visualizerNote={spectrumNote}
                   shuffleEnabled={shuffleEnabled}
                   repeatMode={repeatMode}
                   onTogglePlay={togglePlayback}
@@ -1880,7 +1891,7 @@ export default function App() {
                   durationSeconds={durationSeconds}
                   analyserRef={analyserRef}
                   visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
-                  visualizerActive={pageVisible && !immersiveOpen}
+                  visualizerActive={pageVisible && !immersiveOpen && !spectrumUnavailable}
                   lyricDisplayMode={lyricDisplayMode}
                   onLyricDisplayModeChange={setLyricDisplayMode}
                   onSeek={seekTo}
@@ -1996,6 +2007,7 @@ export default function App() {
               palette={activePalette}
               playing={playing}
               visualizerPlaying={visualizerPlaying}
+              visualizerNote={spectrumNote}
               durationSeconds={durationSeconds}
               analyserRef={analyserRef}
               visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
@@ -2005,7 +2017,7 @@ export default function App() {
               onNext={() => pickRelativeTrack(1)}
               onPrevious={() => pickRelativeTrack(-1)}
               onSeek={seekTo}
-              visualizerActive={pageVisible}
+              visualizerActive={pageVisible && !spectrumUnavailable}
             />
           )}
         </AnimatePresence>
