@@ -86,6 +86,8 @@ class MpvAudioEngine {
     // track switches, device changes and output recovery.
     this.equalizerFilter = "";
     this.equalizerFilterWarning = "";
+    // 1 Hz position poll that keeps the renderer's progress clock alive.
+    this.progressTimer = null;
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -190,12 +192,14 @@ class MpvAudioEngine {
         this.socket = null;
         this.state.ready = false;
         this.state.active = false;
+        this.stopProgressHeartbeat();
         this.rejectPending(new Error("mpv process exited"));
         this.emit({ kind: "stopped" });
       });
 
       await this.connectPipe();
       await this.observeProperties();
+      this.startProgressHeartbeat();
     })();
 
     try {
@@ -244,6 +248,36 @@ class MpvAudioEngine {
     await this.command("observe_property", 4, "audio-bitrate");
     await this.command("observe_property", 5, "audio-exclusive");
     await this.command("observe_property", 6, "audio-device");
+  }
+
+  /**
+   * mpv only pushes `time-pos` when the value changes. An exclusive-mode seek
+   * can flush the decoder (and on some drivers re-arm the AO), after which the
+   * renderer used to see no further position events and its progress bar and
+   * lyrics froze even though audio kept playing. Polling the property once a
+   * second keeps the renderer's clock fed no matter what mpv decides to push.
+   */
+  startProgressHeartbeat() {
+    if (this.progressTimer) return;
+    this.progressTimer = setInterval(() => {
+      if (!this.process || !this.socket || this.socket.destroyed) return;
+      this.command("get_property", "time-pos")
+        .then((value) => {
+          // No file loaded (mpv idle) reports null; nothing to publish then.
+          const position = Number(value);
+          if (!Number.isFinite(position) || position < 0) return;
+          this.state.position = position;
+          this.emit({ kind: "heartbeat" });
+        })
+        .catch(() => undefined);
+    }, 1000);
+    this.progressTimer.unref?.();
+  }
+
+  stopProgressHeartbeat() {
+    if (!this.progressTimer) return;
+    clearInterval(this.progressTimer);
+    this.progressTimer = null;
   }
 
   handleChunk(chunk) {
@@ -325,6 +359,7 @@ class MpvAudioEngine {
 
     if (message.event === "end-file") {
       const advanced = this.pendingAutoAdvance;
+      this.writeLog("native-audio.log", `end-file reason=${message.reason} advanced=${Boolean(advanced)}`);
       if (message.reason === "eof" && advanced) {
         // mpv moves to the appended entry itself; suppress the renderer's
         // own advance so the track does not skip.
@@ -613,7 +648,23 @@ class MpvAudioEngine {
     await this.ensureProcess();
     const nextPosition = Math.max(0, Number(position) || 0);
     this.state.position = nextPosition;
-    await this.command("seek", nextPosition, "absolute+exact");
+    try {
+      await this.command("seek", nextPosition, "absolute+exact");
+    } catch (error) {
+      // Exclusive-mode endpoints and non-seekable streams can reject an exact
+      // seek; fall back to a keyframe seek instead of silently doing nothing.
+      this.writeLog("native-audio.log", `exact seek ${nextPosition.toFixed(1)}s failed: ${error?.message || error}`);
+      await this.command("seek", nextPosition, "absolute").catch(() => undefined);
+    }
+    // Re-arm the position observer and read the position straight back: if the
+    // seek made mpv reload the file or reclock the AO, this is what keeps the
+    // renderer's progress clock alive.
+    await this.command("observe_property", 1, "time-pos").catch(() => undefined);
+    const reported = await this.command("get_property", "time-pos").catch(() => null);
+    if (typeof reported === "number" && Number.isFinite(reported) && reported >= 0) {
+      this.state.position = reported;
+    }
+    this.writeLog("native-audio.log", `seek -> ${nextPosition.toFixed(1)}s, mpv reports ${this.state.position.toFixed(1)}s`);
     this.emit({ kind: "seek" });
     return this.snapshot();
   }

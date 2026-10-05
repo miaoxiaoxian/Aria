@@ -95,15 +95,26 @@ export function useAudioEngine(options: {
   const nativeAnalyserDelayUntilRef = useRef(0);
   const nativeLoadSequenceRef = useRef(0);
   const lastNativeRenderRef = useRef({ at: 0, position: 0 });
+  // Bookkeeping for the renderer-side playback clock: the last position mpv
+  // reported, when it reported it, and when that position last advanced.
+  const nativeClockRef = useRef({ position: 0, at: 0, advancedAt: 0, playing: false, lastEventAt: 0 });
   const audioErrorRef = useRef({ count: 0, lastAt: 0 });
   const preloadKeyRef = useRef<string | null>(null);
   const handledGaplessGenerationRef = useRef(0);
 
   const syncNativeAudioState = useEffectEvent((state: NativeAudioState) => {
     const now = performance.now();
+    const clock = nativeClockRef.current;
+    clock.lastEventAt = now;
+    if (typeof state.position === "number" && Number.isFinite(state.position)) {
+      if (state.position > clock.position + 0.05) clock.advancedAt = now;
+      clock.position = state.position;
+      clock.at = now;
+    }
+    clock.playing = !state.paused;
     const previousNativeRender = lastNativeRenderRef.current;
     const shouldRenderNativeState =
-      state.kind !== "progress" ||
+      (state.kind !== "progress" && state.kind !== "heartbeat") ||
       now - previousNativeRender.at > 500 ||
       Math.abs((state.position ?? 0) - previousNativeRender.position) > 0.8;
     if (shouldRenderNativeState) {
@@ -119,6 +130,7 @@ export function useAudioEngine(options: {
         state.kind === "pause" ||
         state.kind === "seek" ||
         state.kind === "progress" ||
+        state.kind === "heartbeat" ||
         state.kind === "ended");
 
     if (shouldSyncPlayback) {
@@ -181,6 +193,62 @@ export function useAudioEngine(options: {
       dispose?.();
     };
   }, [syncNativeAudioState]);
+
+  // Keep the renderer's playback clock alive in native mode. mpv only pushes
+  // `time-pos` while the value changes, and certain events (an exclusive-mode
+  // seek, an AO re-arm, a device recovery) can end that stream — which froze
+  // the progress bar and the lyrics while the music kept playing. Interpolate
+  // between events, and poll the engine outright when the events dry up.
+  useEffect(() => {
+    if (!nativePlaybackEnabled) return;
+    const nativeAudio = window.ariaDesktop?.nativeAudio;
+    let stalledReported = false;
+
+    const interpolate = window.setInterval(() => {
+      const clock = nativeClockRef.current;
+      if (!options.playing || !clock.playing) return;
+      const now = performance.now();
+      // A stream that stopped advancing must not keep projecting forward.
+      if (now - clock.advancedAt > 2500) return;
+      const elapsed = (now - clock.at) / 1000;
+      if (elapsed <= 0 || elapsed > 5) return;
+      const total = options.durationSeconds > 0 ? options.durationSeconds : 0;
+      const projected = clock.position + elapsed;
+      commitPlaybackTime(total > 0 ? Math.min(projected, total) : projected);
+    }, 500);
+
+    const watchdog = window.setInterval(() => {
+      const clock = nativeClockRef.current;
+      if (!options.playing) return;
+      if (performance.now() - clock.lastEventAt < 2500) return;
+      clock.lastEventAt = performance.now();
+      if (!stalledReported) {
+        stalledReported = true;
+        window.ariaDesktop?.log?.({
+          level: "warn",
+          source: "audio.watchdog",
+          message: "native position events stalled; polling engine state",
+          context: { position: clock.position, active: clock.playing },
+        }).catch(() => undefined);
+      }
+      nativeAudio
+        ?.getState?.()
+        .then((state) => {
+          if (!state) return;
+          syncNativeAudioState(state as NativeAudioState);
+          // The poll is authoritative about the pause state as well.
+          if (state.active && typeof state.paused === "boolean") {
+            options.setPlaying(() => !state.paused);
+          }
+        })
+        .catch(() => undefined);
+    }, 1000);
+
+    return () => {
+      window.clearInterval(interpolate);
+      window.clearInterval(watchdog);
+    };
+  }, [nativePlaybackEnabled, options.playing, options.durationSeconds]);
 
   useEffect(() => {
     const nativeAudio = window.ariaDesktop?.nativeAudio;
