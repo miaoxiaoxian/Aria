@@ -335,7 +335,10 @@ export function SettingsPanel({
             </div>
           </section>
 
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+          {/* The account card keeps its own row and its natural height:
+              grid items stretch to the tallest sibling, and the tall ASIO card
+              used to inflate it. */}
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-start-1 lg:self-start">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Account</p>
@@ -366,10 +369,9 @@ export function SettingsPanel({
             )}
           </section>
 
-          {/* ASIO lives directly under the account card: it is the other
-              "how does audio leave this machine" setting and mirrors the
-              channel-mapping dialog foobar2000 uses for the same driver. */}
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+          {/* ASIO sits on its own row under the account card, with the DSD card
+              beside it (col-start forces the row break). */}
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-start-1">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">ASIO</p>
@@ -482,7 +484,7 @@ export function SettingsPanel({
             )}
           </section>
 
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-start-2">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">DSD</p>
