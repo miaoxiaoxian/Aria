@@ -507,6 +507,14 @@ export default function App() {
     ? Boolean(playing || (nativeAudioState?.active && !nativeAudioState.paused))
     : playing;
 
+  // Live description of the DSD path: native DoP while the packed stream is
+  // playing, otherwise the plain DSD-to-PCM decode.
+  const dsdLiveLabel = nativeAudioState?.dop?.active
+    ? `原生 DoP · ${nativeAudioState.dop.tier ?? "DSD"}`
+    : activeTrack.format === "DSD"
+      ? "DSD → PCM（D2P）"
+      : null;
+
   // DSD and optical-disc tracks never reach the renderer's analyser (they are
   // decoded by mpv), so the spectrum would only show synthetic noise. Hide it
   // and say why instead of animating a fake spectrum.
@@ -2146,6 +2154,7 @@ export default function App() {
                 onDsdPcmRateChange={setDsdPcmRate}
                 dsdExclusive={dsdExclusive}
                 onDsdExclusiveChange={setDsdExclusive}
+                dsdLiveLabel={dsdLiveLabel}
                 keyboardShortcuts={keyboardShortcuts}
                 onKeyboardShortcutsChange={setKeyboardShortcuts}
                 perfMode={perfMode}

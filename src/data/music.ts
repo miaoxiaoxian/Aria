@@ -33,6 +33,8 @@ export type Track = {
   sampleRate?: number | null;
   /** Source container label, e.g. "FLAC", "DSD". */
   format?: string | null;
+  /** Absolute path of a local file; the DoP packer reads the raw DSD payload. */
+  filePath?: string | null;
   bpm?: number | null;
   libraryRoot?: string;
   mediaKind?: "file" | "audio-cd";

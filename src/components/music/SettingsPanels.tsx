@@ -73,6 +73,7 @@ export function SettingsPanel({
   onDsdPcmRateChange,
   dsdExclusive,
   onDsdExclusiveChange,
+  dsdLiveLabel,
   keyboardShortcuts,
   onKeyboardShortcutsChange,
   perfMode,
@@ -108,6 +109,8 @@ export function SettingsPanel({
   onDsdPcmRateChange: (value: DsdPcmRate) => void;
   dsdExclusive: boolean;
   onDsdExclusiveChange: (value: boolean) => void;
+  /** Live path label, e.g. "原生 DoP · DSD128" while such a stream plays. */
+  dsdLiveLabel?: string | null;
   keyboardShortcuts: KeyboardShortcuts;
   onKeyboardShortcutsChange: (shortcuts: KeyboardShortcuts) => void;
   perfMode?: boolean;
@@ -346,7 +349,7 @@ export function SettingsPanel({
                 <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">DSD</p>
                 <h3 className="mt-1 text-base font-semibold">DSD 播放</h3>
               </div>
-              <Badge>{dsdPlayback === "dop" ? "原生 DoP" : "解码 PCM"}</Badge>
+              <Badge>{dsdLiveLabel ?? (dsdPlayback === "dop" ? "原生 DoP" : "解码 PCM")}</Badge>
             </div>
 
             <div className="mt-4 grid gap-2">
@@ -354,26 +357,24 @@ export function SettingsPanel({
                 {
                   mode: "d2p" as const,
                   label: "解码为 PCM（D2P）",
-                  badge: "当前",
-                  desc: "mpv 把 DSD 解码成 PCM 再送 WASAPI，兼容所有设备，均衡器与音量可用。",
+                  badge: "兼容",
+                  desc: "mpv 把 DSD 解码成 PCM 再送 WASAPI，任何设备都能放，均衡器与音量可用。",
                 },
                 {
                   mode: "dop" as const,
                   label: "原生 DoP",
-                  badge: "开发中",
-                  desc: "1bit 流原样送进解码器，需要独占模式支持 176.4k（DSD64）/ 352.8k（DSD128）。",
+                  badge: "实验",
+                  desc: "播放前检查容器并把 1bit 流打包成 24bit/176.4k（DSD64）或 352.8k（DSD128）原样送进解码器；无法满足时自动回退 D2P。",
                 },
               ].map(({ mode, label, badge, desc }) => {
-                const locked = mode === "dop";
                 const active = dsdPlayback === mode;
                 return (
                   <button
                     key={mode}
                     type="button"
-                    disabled={locked}
                     onClick={() => onDsdPlaybackChange(mode)}
                     className={cn(
-                      "flex items-start justify-between gap-3 rounded-[1.15rem] border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-55",
+                      "flex items-start justify-between gap-3 rounded-[1.15rem] border p-3 text-left transition",
                       active
                         ? "border-neutral-950 bg-neutral-950 text-white shadow-[0_12px_30px_rgba(23,23,23,0.14)]"
                         : "border-white/72 bg-white/72 hover:bg-white",

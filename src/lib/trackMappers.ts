@@ -45,6 +45,7 @@ export function localTrackToUiTrack(track: ApiScannedTrack, index: number): Trac
     bitrate: track.bitrate ?? null,
     sampleRate: track.sampleRate ?? null,
     format: track.format ?? null,
+    filePath: track.path ?? null,
     bpm: null,
     libraryRoot: track.libraryRoot,
     mediaKind: track.mediaKind ?? "file",

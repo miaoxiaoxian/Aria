@@ -1,8 +1,10 @@
 const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
+const fsp = require("node:fs/promises");
 const net = require("node:net");
 const path = require("node:path");
 const { CdAudioRipper } = require("./cdAudioRipper.cjs");
+const dopCodec = require("./dopCodec.cjs");
 
 // OOPZ's Windows application-loopback API selects a process by executable
 // name (for example, `Aria.exe`).  The branded filename lets the native
@@ -91,6 +93,8 @@ class MpvAudioEngine {
     // Seek coalescing: while a seek is running, only the newest target is kept.
     this.pendingSeekTarget = null;
     this.seekInFlight = false;
+    // DoP: the temporary 24-bit WAV prepared for the track that is playing.
+    this.dopTempPath = null;
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -105,6 +109,7 @@ class MpvAudioEngine {
       deviceId: "auto",
       bitrate: null,
       gaplessGeneration: 0,
+      dop: null,
     };
   }
 
@@ -476,7 +481,85 @@ class MpvAudioEngine {
 
     await this.ensureProcess();
     const token = ++this.loadToken;
-    return this.performLoad(options, token);
+    const prepared = await this.prepareDopLoad(options);
+    if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
+    return this.performLoad(prepared, token);
+  }
+
+  /**
+   * "Check DSD vs PCM before the music starts": when the renderer asks for DoP
+   * and the source really is a DSD container, the raw 1-bit payload is repacked
+   * into a 24-bit DoP WAV that mpv can play bit-perfect. Anything else (PCM,
+   * multichannel DSD, an unsupported tier, a failed header read) falls back to
+   * the normal DSD-to-PCM path, and the previous DoP stream is dropped.
+   */
+  async prepareDopLoad(options = {}) {
+    const wantsDop = options.preferDop === true;
+    const filePath = typeof options.filePath === "string" ? options.filePath : "";
+    if (!wantsDop || !filePath || !dopCodec.isDsdPath(filePath)) {
+      await this.dropDopStream(options.trackId);
+      this.state.dop = null;
+      return options;
+    }
+
+    try {
+      const layout = await dopCodec.readDsdLayout(filePath);
+      const dop = dopCodec.describeDop(layout);
+      if (!dop) {
+        this.writeLog("native-audio.log", `DoP not possible for ${path.basename(filePath)} (layout=${layout ? layout.container : "unknown"})`);
+        await this.dropDopStream(options.trackId);
+        this.state.dop = null;
+        return options;
+      }
+
+      const cacheDir = await dopCodec.ensureDopCacheDir();
+      const target = path.join(cacheDir, `${options.trackId || "track"}-${dop.dopRate}.wav`);
+      await this.dropDopStream(options.trackId);
+      // One prepared stream at a time: sweep anything a previous session left.
+      try {
+        for (const entry of await fsp.readdir(cacheDir)) {
+          const stale = path.join(cacheDir, entry);
+          if (stale !== target) await fsp.rm(stale, { force: true }).catch(() => undefined);
+        }
+      } catch {
+        // best effort
+      }
+      const startedAt = Date.now();
+      this.emit({ kind: "dop-prepare", dop: { active: false, tier: dop.tier, rate: dop.dopRate } });
+      await dopCodec.encodeDopWav(filePath, layout, target);
+      this.dopTempPath = target;
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+      this.writeLog("native-audio.log", `DoP prepared: ${path.basename(filePath)} ${dop.tier} -> ${dop.dopRate} Hz in ${seconds}s`);
+      return {
+        ...options,
+        // The packed WAV is stereo 24-bit at the DoP rate; volume must stay at
+        // 100 % (a software gain would corrupt the payload) and the endpoint
+        // has to be taken exclusively so the mixer cannot resample it.
+        url: target,
+        volume: 100,
+        exclusive: true,
+        samplerate: 0,
+        dop: { active: true, tier: dop.tier, rate: dop.dopRate, source: path.basename(filePath) },
+      };
+    } catch (error) {
+      this.writeLog("native-audio.log", `DoP preparation failed: ${error?.message || error}`);
+      await this.dropDopStream(options.trackId);
+      this.state.dop = null;
+      return options;
+    }
+  }
+
+  /** Removes the prepared stream of a previous track ("auto-off after switch"). */
+  async dropDopStream(keepTrackId) {
+    const current = this.dopTempPath;
+    this.dopTempPath = null;
+    if (!current) return;
+    if (keepTrackId && path.basename(current).startsWith(`${keepTrackId}-`)) return;
+    try {
+      await fsp.rm(current, { force: true });
+    } catch {
+      // A locked file is cleaned up by the next sweep or by the OS.
+    }
   }
 
   // Append the next track to mpv's internal playlist so the advance happens
@@ -609,6 +692,7 @@ class MpvAudioEngine {
       exclusive = false,
       deviceId = "default",
       samplerate = 0,
+      dop = null,
       nativeDevice = null,
       startChapter = null,
       endChapter = null,
@@ -618,6 +702,7 @@ class MpvAudioEngine {
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
     this.pendingAutoAdvance = null;
+    this.state.dop = dop;
     this.pendingSeek = Math.max(0, Number(position) || 0);
     this.pendingPause = Boolean(paused);
     this.state.trackId = trackId;
@@ -723,6 +808,16 @@ class MpvAudioEngine {
 
   async applyEqualizerFilter() {
     if (!this.process || !this.socket || this.socket.destroyed) return;
+    // A DoP stream is not audio to be processed: any filter would rewrite the
+    // marker/payload bytes and the DAC would hear noise instead of DSD.
+    if (this.state.dop?.active) {
+      try {
+        await this.command("af", "clr");
+      } catch {
+        // ignore
+      }
+      return;
+    }
     const filter = typeof this.equalizerFilter === "string" ? this.equalizerFilter : "";
     try {
       if (!filter) {
@@ -791,6 +886,8 @@ class MpvAudioEngine {
     this.state.duration = 0;
     this.state.paused = true;
     this.state.bitrate = null;
+    this.state.dop = null;
+    void this.dropDopStream();
     this.emit({ kind: "stop" });
     return this.snapshot();
   }
@@ -798,6 +895,8 @@ class MpvAudioEngine {
   async teardown() {
     this.loadToken += 1;
     this.pendingAutoAdvance = null;
+    this.state.dop = null;
+    void this.dropDopStream();
     this.rejectPending(new Error("Native audio engine is being restarted."));
     if (this.socket && !this.socket.destroyed) {
       this.socket.destroy();

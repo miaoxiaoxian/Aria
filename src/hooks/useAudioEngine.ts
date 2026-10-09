@@ -65,19 +65,23 @@ export function useAudioEngine(options: {
   );
   const nativePlaybackEnabled = Boolean(nativePlaybackRequested && !nativePlaybackFailed);
 
-  // DSD files are decoded to PCM by mpv (352.8 kHz for DSD64, 705.6 kHz for
-  // DSD128). A pinned output rate keeps that inside what the DAC accepts, and
-  // taking the endpoint exclusively stops the shared mixer from resampling it
-  // down to 48 kHz.
+  // DSD handling. In DoP mode the engine repacks the raw 1-bit payload into a
+  // 24-bit DoP stream the DAC plays natively; otherwise mpv decodes DSD to PCM
+  // (352.8 kHz for DSD64, 705.6 kHz for DSD128) and a pinned output rate keeps
+  // that inside what the device accepts. Either way DSD never reaches the
+  // shared mixer, which would resample it down to 48 kHz.
   const dsdOutput = useMemo(() => {
     const isDsd = activeTrack.format === "DSD";
     const forcedRate = options.dsdPcmRate && options.dsdPcmRate !== "auto" ? Number(options.dsdPcmRate) : 0;
+    const preferDop = isDsd && options.dsdPlayback === "dop" && Boolean(activeTrack.filePath);
     return {
       isDsd,
-      samplerate: isDsd && Number.isFinite(forcedRate) ? forcedRate : 0,
-      exclusive: isDsd && options.dsdExclusive === true,
+      preferDop,
+      filePath: activeTrack.filePath ?? null,
+      samplerate: isDsd && !preferDop && Number.isFinite(forcedRate) ? forcedRate : 0,
+      exclusive: preferDop || (isDsd && options.dsdExclusive === true),
     };
-  }, [activeTrack.format, options.dsdExclusive, options.dsdPcmRate]);
+  }, [activeTrack.filePath, activeTrack.format, options.dsdExclusive, options.dsdPcmRate, options.dsdPlayback]);
 
   const activeStreamUrl = useMemo(() => {
     if (!activeTrack.streamUrl) return null;
@@ -583,6 +587,8 @@ export function useAudioEngine(options: {
         volume: options.volume,
         exclusive: dsdOutput.exclusive || options.exclusiveMode,
         samplerate: dsdOutput.samplerate,
+        preferDop: dsdOutput.preferDop,
+        filePath: dsdOutput.filePath,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,
@@ -868,6 +874,8 @@ export function useAudioEngine(options: {
         volume: options.volume,
         exclusive: dsdOutput.exclusive || options.exclusiveMode,
         samplerate: dsdOutput.samplerate,
+        preferDop: dsdOutput.preferDop,
+        filePath: dsdOutput.filePath,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,
