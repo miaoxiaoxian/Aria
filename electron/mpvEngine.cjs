@@ -95,6 +95,9 @@ class MpvAudioEngine {
     this.seekInFlight = false;
     // DoP: the temporary 24-bit WAV prepared for the track that is playing.
     this.dopTempPath = null;
+    // Volume the application asked for; while DoP is active mpv is pinned to
+    // 100 % and this is what gets restored afterwards.
+    this.requestedVolume = null;
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -447,8 +450,12 @@ class MpvAudioEngine {
   async applyOutputSettings({ exclusive, deviceId, volume, samplerate }) {
     await this.ensureProcess();
     if (typeof volume === "number") {
-      this.state.volume = volume;
-      await this.command("set_property", "volume", volume);
+      const requested = Math.max(0, Math.min(100, Number(volume) || 0));
+      this.requestedVolume = requested;
+      // DoP payload must reach the DAC untouched - see setVolume().
+      const applied = this.state.dop?.active ? 100 : requested;
+      this.state.volume = applied;
+      await this.command("set_property", "volume", applied);
     }
     if (typeof exclusive === "boolean") {
       await this.command("set_property", "audio-exclusive", exclusive);
@@ -723,6 +730,13 @@ class MpvAudioEngine {
     await this.applyEqualizerFilter();
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
+    if (dop?.active) {
+      // Field diagnostic for the one failure mode that is inaudible in logs:
+      // any software gain above/below 100 % would break the DoP markers.
+      const applied = await this.command("get_property", "volume").catch(() => null);
+      this.writeLog("native-audio.log", `DoP active: volume requested=${this.requestedVolume ?? "-"} applied=${applied} exclusive=${this.state.exclusive}`);
+    }
+
     if (String(url).startsWith("cdda://")) {
       const loadOptions = {};
       if (nativeDevice) loadOptions["cdda-device"] = nativeDevice;
@@ -789,8 +803,14 @@ class MpvAudioEngine {
 
   async setVolume(volume) {
     await this.ensureProcess();
-    this.state.volume = Math.max(0, Math.min(100, Number(volume) || 0));
-    await this.command("set_property", "volume", this.state.volume);
+    const requested = Math.max(0, Math.min(100, Number(volume) || 0));
+    this.requestedVolume = requested;
+    // A DoP stream is data, not audio: scaling it rewrites the marker/payload
+    // bytes and the DAC drops the DSD lock (audible as hiss). While DoP is
+    // active mpv therefore stays at 100 % and the UI is told so.
+    const applied = this.state.dop?.active ? 100 : requested;
+    this.state.volume = applied;
+    await this.command("set_property", "volume", applied);
     this.emit({ kind: "volume" });
     return this.snapshot();
   }
