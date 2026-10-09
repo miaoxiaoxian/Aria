@@ -5,6 +5,17 @@ export type QualityLevel = "standard" | "higher" | "exhigh" | "lossless" | "hire
 export type CoverPalette = { primary: string; secondary: string };
 export type PlayerSideView = "lyrics" | "queue";
 export type AudioOutputMode = "system" | "shared" | "exclusive";
+/** How DSD sources are delivered: decoded PCM (D2P) or bit-perfect DoP. */
+export type DsdPlaybackMode = "d2p" | "dop";
+/** Output rate used when DSD is decoded to PCM; "auto" follows the source. */
+export type DsdPcmRate = "auto" | "44100" | "88200" | "176400";
+
+export const dsdPcmRateLabels: Record<DsdPcmRate, string> = {
+  auto: "自动（跟随源）",
+  "176400": "176.4 kHz",
+  "88200": "88.2 kHz",
+  "44100": "44.1 kHz",
+};
 
 export type CachedPlayerState = {
   activeTrackId?: string;
@@ -256,6 +267,9 @@ export function readCachedAudioSettings() {
       gaplessEnabled?: boolean;
       exclusiveMode?: boolean;
       outputMode?: AudioOutputMode;
+      dsdPlayback?: DsdPlaybackMode;
+      dsdPcmRate?: DsdPcmRate;
+      dsdExclusive?: boolean;
     };
     const outputMode =
       parsed.outputMode === "shared" || parsed.outputMode === "exclusive" || parsed.outputMode === "system"
@@ -263,12 +277,19 @@ export function readCachedAudioSettings() {
         : parsed.exclusiveMode
           ? "exclusive"
           : "system";
+    const dsdPcmRate: DsdPcmRate =
+      parsed.dsdPcmRate === "44100" || parsed.dsdPcmRate === "88200" || parsed.dsdPcmRate === "176400"
+        ? parsed.dsdPcmRate
+        : "auto";
     return {
       sinkId: typeof parsed.sinkId === "string" ? parsed.sinkId : "default",
       hifiEnabled: typeof parsed.hifiEnabled === "boolean" ? parsed.hifiEnabled : true,
       gaplessEnabled: typeof parsed.gaplessEnabled === "boolean" ? parsed.gaplessEnabled : false,
       exclusiveMode: typeof parsed.exclusiveMode === "boolean" ? parsed.exclusiveMode : false,
       outputMode,
+      dsdPlayback: parsed.dsdPlayback === "dop" ? "dop" : "d2p",
+      dsdPcmRate,
+      dsdExclusive: typeof parsed.dsdExclusive === "boolean" ? parsed.dsdExclusive : true,
     };
   } catch {
     return {};
@@ -281,6 +302,9 @@ export function writeCachedAudioSettings(settings: {
   gaplessEnabled: boolean;
   exclusiveMode: boolean;
   outputMode: AudioOutputMode;
+  dsdPlayback?: DsdPlaybackMode;
+  dsdPcmRate?: DsdPcmRate;
+  dsdExclusive?: boolean;
 }) {
   try {
     window.localStorage.setItem(audioSettingsKey, JSON.stringify(settings));

@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Metric } from "@/components/music/shared";
 import { api, type DiagnosticsStats, type NeteaseAccountSummary, type NeteaseQrStart, type RuntimeInfo } from "@/lib/api";
 import type { NativeAudioState } from "@/lib/audioTypes";
-import type { AudioOutputMode } from "@/lib/playerPresentation";
+import type { AudioOutputMode, DsdPcmRate, DsdPlaybackMode } from "@/lib/playerPresentation";
+import { dsdPcmRateLabels } from "@/lib/playerPresentation";
 import {
   defaultKeyboardShortcuts,
   formatShortcut,
@@ -66,6 +67,12 @@ export function SettingsPanel({
   audioOutputMode,
   onAudioOutputModeChange,
   exclusiveMode,
+  dsdPlayback,
+  onDsdPlaybackChange,
+  dsdPcmRate,
+  onDsdPcmRateChange,
+  dsdExclusive,
+  onDsdExclusiveChange,
   keyboardShortcuts,
   onKeyboardShortcutsChange,
   perfMode,
@@ -95,6 +102,12 @@ export function SettingsPanel({
   audioOutputMode: AudioOutputMode;
   onAudioOutputModeChange: (value: AudioOutputMode) => void;
   exclusiveMode: boolean;
+  dsdPlayback: DsdPlaybackMode;
+  onDsdPlaybackChange: (value: DsdPlaybackMode) => void;
+  dsdPcmRate: DsdPcmRate;
+  onDsdPcmRateChange: (value: DsdPcmRate) => void;
+  dsdExclusive: boolean;
+  onDsdExclusiveChange: (value: boolean) => void;
   keyboardShortcuts: KeyboardShortcuts;
   onKeyboardShortcutsChange: (shortcuts: KeyboardShortcuts) => void;
   perfMode?: boolean;
@@ -325,6 +338,124 @@ export function SettingsPanel({
                 退出登录
               </Button>
             )}
+          </section>
+
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">DSD</p>
+                <h3 className="mt-1 text-base font-semibold">DSD 播放</h3>
+              </div>
+              <Badge>{dsdPlayback === "dop" ? "原生 DoP" : "解码 PCM"}</Badge>
+            </div>
+
+            <div className="mt-4 grid gap-2">
+              {[
+                {
+                  mode: "d2p" as const,
+                  label: "解码为 PCM（D2P）",
+                  badge: "当前",
+                  desc: "mpv 把 DSD 解码成 PCM 再送 WASAPI，兼容所有设备，均衡器与音量可用。",
+                },
+                {
+                  mode: "dop" as const,
+                  label: "原生 DoP",
+                  badge: "开发中",
+                  desc: "1bit 流原样送进解码器，需要独占模式支持 176.4k（DSD64）/ 352.8k（DSD128）。",
+                },
+              ].map(({ mode, label, badge, desc }) => {
+                const locked = mode === "dop";
+                const active = dsdPlayback === mode;
+                return (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={locked}
+                    onClick={() => onDsdPlaybackChange(mode)}
+                    className={cn(
+                      "flex items-start justify-between gap-3 rounded-[1.15rem] border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-55",
+                      active
+                        ? "border-neutral-950 bg-neutral-950 text-white shadow-[0_12px_30px_rgba(23,23,23,0.14)]"
+                        : "border-white/72 bg-white/72 hover:bg-white",
+                    )}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold">{label}</span>
+                      <span className={cn("mt-1 block text-xs leading-5", active ? "text-white/62" : "text-neutral-500")}>
+                        {desc}
+                      </span>
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold",
+                        active ? "bg-white text-neutral-950" : "bg-white/80 text-neutral-500 shadow-sm",
+                      )}
+                    >
+                      {badge}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">D2P</p>
+                <p className="mt-1 text-sm font-semibold">解码输出采样率</p>
+              </div>
+              <Badge>{dsdPcmRate === "auto" ? "跟随源" : dsdPcmRateLabels[dsdPcmRate]}</Badge>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(Object.keys(dsdPcmRateLabels) as DsdPcmRate[]).map((rate) => {
+                const active = dsdPcmRate === rate;
+                return (
+                  <button
+                    key={rate}
+                    type="button"
+                    onClick={() => onDsdPcmRateChange(rate)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                      active
+                        ? "border-neutral-950 bg-neutral-950 text-white"
+                        : "border-white/72 bg-white/72 text-neutral-600 hover:bg-white",
+                    )}
+                  >
+                    {dsdPcmRateLabels[rate]}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-[1.15rem] bg-neutral-950/[0.03] p-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold">DSD 曲目强制独占输出</p>
+                <p className="mt-1 text-xs leading-5 text-neutral-500">
+                  独占可避免共享混音把 352.8 kHz 重采样成 48 kHz；设备被其它程序占用时可能打不开。
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dsdExclusive}
+                onClick={() => onDsdExclusiveChange(!dsdExclusive)}
+                className={cn(
+                  "relative h-7 w-13 shrink-0 rounded-full transition",
+                  dsdExclusive ? "bg-neutral-950" : "bg-neutral-950/12",
+                )}
+              >
+                <span
+                  className={cn(
+                    "absolute top-0.5 size-6 rounded-full bg-white shadow-sm transition",
+                    dsdExclusive ? "left-6.5" : "left-0.5",
+                  )}
+                />
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs leading-5 text-neutral-500">
+              DSD 曲目由 mpv 解码（Chromium 无法解码 DSD），标签显示 DSD64/128/256 与比特率。
+              原生 DoP 模式下软件音量与均衡器不可用，需用解码器或功放调音量。
+            </p>
           </section>
 
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">

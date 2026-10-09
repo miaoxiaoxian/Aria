@@ -150,6 +150,9 @@ export default function App() {
   const [hifiEnabled, setHifiEnabled] = useState(() => readCachedAudioSettings().hifiEnabled ?? true);
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
   const [audioOutputMode, setAudioOutputMode] = useState<AudioOutputMode>(() => readCachedAudioSettings().outputMode ?? "system");
+  const [dsdPlayback, setDsdPlayback] = useState<DsdPlaybackMode>(() => readCachedAudioSettings().dsdPlayback ?? "d2p");
+  const [dsdPcmRate, setDsdPcmRate] = useState<DsdPcmRate>(() => readCachedAudioSettings().dsdPcmRate ?? "auto");
+  const [dsdExclusive, setDsdExclusive] = useState(() => readCachedAudioSettings().dsdExclusive ?? true);
   const [equalizer, setEqualizer] = useState<EqualizerSettings>(readCachedEqualizerSettings);
   const [equalizerPresets, setEqualizerPresets] = useState<EqualizerCustomPreset[]>(readCachedEqualizerPresets);
   const [equalizerOpen, setEqualizerOpen] = useState(false);
@@ -490,6 +493,9 @@ export default function App() {
     setDurationSeconds,
     exclusiveMode,
     durationSeconds,
+    dsdPcmRate,
+    dsdExclusive,
+    dsdPlayback,
     handleTrackEnded,
     handleNativeTrackAdvanced,
     pickRelativeTrack,
@@ -2134,6 +2140,12 @@ export default function App() {
                 audioOutputMode={audioOutputMode}
                 onAudioOutputModeChange={setAudioOutputMode}
                 exclusiveMode={exclusiveMode}
+                dsdPlayback={dsdPlayback}
+                onDsdPlaybackChange={setDsdPlayback}
+                dsdPcmRate={dsdPcmRate}
+                onDsdPcmRateChange={setDsdPcmRate}
+                dsdExclusive={dsdExclusive}
+                onDsdExclusiveChange={setDsdExclusive}
                 keyboardShortcuts={keyboardShortcuts}
                 onKeyboardShortcutsChange={setKeyboardShortcuts}
                 perfMode={perfMode}

@@ -439,7 +439,7 @@ class MpvAudioEngine {
     return deviceId;
   }
 
-  async applyOutputSettings({ exclusive, deviceId, volume }) {
+  async applyOutputSettings({ exclusive, deviceId, volume, samplerate }) {
     await this.ensureProcess();
     if (typeof volume === "number") {
       this.state.volume = volume;
@@ -448,6 +448,13 @@ class MpvAudioEngine {
     if (typeof exclusive === "boolean") {
       await this.command("set_property", "audio-exclusive", exclusive);
       this.state.exclusive = Boolean(await this.command("get_property", "audio-exclusive"));
+    }
+    if (typeof samplerate === "number" && Number.isFinite(samplerate) && samplerate >= 0) {
+      // 0 means "follow the file". DSD is decoded to PCM at 352.8 kHz (DSD64) or
+      // 705.6 kHz (DSD128), which is above what many DACs accept over WASAPI, so
+      // the UI can pin a lower output rate instead of letting it fail or fall
+      // back to the 48 kHz shared mix.
+      await this.command("set_property", "audio-samplerate", Math.round(samplerate)).catch(() => undefined);
     }
     if (typeof deviceId === "string") {
       this.state.deviceId = this.normalizeDeviceId(deviceId);
@@ -601,6 +608,7 @@ class MpvAudioEngine {
       volume = 72,
       exclusive = false,
       deviceId = "default",
+      samplerate = 0,
       nativeDevice = null,
       startChapter = null,
       endChapter = null,
@@ -624,7 +632,7 @@ class MpvAudioEngine {
     await this.command("set_property", "pause", true).catch(() => undefined);
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
-    await this.applyOutputSettings({ exclusive, deviceId, volume });
+    await this.applyOutputSettings({ exclusive, deviceId, volume, samplerate });
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
     await this.applyEqualizerFilter();

@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { commitPlaybackTime, getPlaybackTime } from "@/lib/playbackClock";
 import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
 import { equalizerBandsForMode, equalizerModeQ, isEqualizerActive, type EqualizerSettings } from "@/lib/equalizer";
-import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type QualityLevel } from "@/lib/playerPresentation";
+import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type DsdPcmRate, type DsdPlaybackMode, type QualityLevel } from "@/lib/playerPresentation";
 
 // Owns the media pipeline: the HTML audio element, the mpv native bridge
 // (loading/progress/pause/volume/device + exclusive mode), output device
@@ -28,6 +28,12 @@ export function useAudioEngine(options: {
   setDurationSeconds: (seconds: number) => void;
   exclusiveMode: boolean;
   durationSeconds: number;
+  // DSD handling: mpv decodes DSD to PCM, and these two settings decide at
+  // which rate and whether the endpoint is taken exclusively (the shared mixer
+  // would otherwise resample 352.8 kHz down to 48 kHz).
+  dsdPcmRate?: DsdPcmRate;
+  dsdExclusive?: boolean;
+  dsdPlayback?: DsdPlaybackMode;
   handleTrackEnded: () => void;
   // Called when mpv advances to an entry that was appended for gapless
   // playback. The native engine owns the transition, but React still needs
@@ -58,6 +64,20 @@ export function useAudioEngine(options: {
         (options.audioOutputMode !== "system" && Boolean(activeTrack.streamUrl))),
   );
   const nativePlaybackEnabled = Boolean(nativePlaybackRequested && !nativePlaybackFailed);
+
+  // DSD files are decoded to PCM by mpv (352.8 kHz for DSD64, 705.6 kHz for
+  // DSD128). A pinned output rate keeps that inside what the DAC accepts, and
+  // taking the endpoint exclusively stops the shared mixer from resampling it
+  // down to 48 kHz.
+  const dsdOutput = useMemo(() => {
+    const isDsd = activeTrack.format === "DSD";
+    const forcedRate = options.dsdPcmRate && options.dsdPcmRate !== "auto" ? Number(options.dsdPcmRate) : 0;
+    return {
+      isDsd,
+      samplerate: isDsd && Number.isFinite(forcedRate) ? forcedRate : 0,
+      exclusive: isDsd && options.dsdExclusive === true,
+    };
+  }, [activeTrack.format, options.dsdExclusive, options.dsdPcmRate]);
 
   const activeStreamUrl = useMemo(() => {
     if (!activeTrack.streamUrl) return null;
@@ -344,8 +364,20 @@ export function useAudioEngine(options: {
       gaplessEnabled: options.gaplessEnabled,
       exclusiveMode: options.exclusiveMode,
       outputMode: options.audioOutputMode,
+      dsdPlayback: options.dsdPlayback,
+      dsdPcmRate: options.dsdPcmRate,
+      dsdExclusive: options.dsdExclusive,
     });
-  }, [options.audioOutputMode, options.exclusiveMode, options.gaplessEnabled, options.hifiEnabled, selectedSinkId]);
+  }, [
+    options.audioOutputMode,
+    options.dsdExclusive,
+    options.dsdPlayback,
+    options.dsdPcmRate,
+    options.exclusiveMode,
+    options.gaplessEnabled,
+    options.hifiEnabled,
+    selectedSinkId,
+  ]);
 
   useEffect(() => {
     setNativePlaybackFailed(false);
@@ -549,7 +581,8 @@ export function useAudioEngine(options: {
         position: options.pendingSeekRef.current || 0,
         paused: !options.playing,
         volume: options.volume,
-        exclusive: options.exclusiveMode,
+        exclusive: dsdOutput.exclusive || options.exclusiveMode,
+        samplerate: dsdOutput.samplerate,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,
@@ -581,6 +614,7 @@ export function useAudioEngine(options: {
     options.exclusiveMode,
     options.volume,
     options.playing,
+    dsdOutput,
     selectedSinkId,
     syncNativeAudioState,
   ]);
@@ -832,7 +866,8 @@ export function useAudioEngine(options: {
         position: 0,
         paused: false,
         volume: options.volume,
-        exclusive: options.exclusiveMode,
+        exclusive: dsdOutput.exclusive || options.exclusiveMode,
+        samplerate: dsdOutput.samplerate,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,
