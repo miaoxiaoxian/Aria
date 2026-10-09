@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   configureGlobalShortcuts: (payload) => ipcRenderer.invoke("aria:configure-global-shortcuts", payload || {}),
   copyImageToClipboard: (payload) => ipcRenderer.invoke("aria:copy-image", payload || {}),
   log: (payload) => ipcRenderer.invoke("aria:log", payload),
+  asio: {
+    // Installed ASIO drivers, as registered in HKLM\SOFTWARE\ASIO.
+    listDrivers: () => ipcRenderer.invoke("aria:asio:drivers"),
+  },
   nativeAudio: {
     supported: process.platform === "win32",
     isSupported: () => ipcRenderer.invoke("aria:native-audio:supported"),

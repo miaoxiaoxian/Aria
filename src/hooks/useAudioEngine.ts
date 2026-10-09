@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { commitPlaybackTime, getPlaybackTime } from "@/lib/playbackClock";
 import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
 import { equalizerBandsForMode, equalizerModeQ, isEqualizerActive, type EqualizerSettings } from "@/lib/equalizer";
-import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type DsdPcmRate, type DsdPlaybackMode, type QualityLevel } from "@/lib/playerPresentation";
+import { readCachedAudioSettings, writeCachedAudioSettings, type AsioChannelMap, type AsioDsdMode, type AudioOutputMode, type DsdPcmRate, type DsdPlaybackMode, type QualityLevel } from "@/lib/playerPresentation";
 
 // Owns the media pipeline: the HTML audio element, the mpv native bridge
 // (loading/progress/pause/volume/device + exclusive mode), output device
@@ -34,6 +34,12 @@ export function useAudioEngine(options: {
   dsdPcmRate?: DsdPcmRate;
   dsdExclusive?: boolean;
   dsdPlayback?: DsdPlaybackMode;
+  // ASIO output configuration. Persisted here so the settings survive a
+  // restart even though the ASIO engine itself is not wired up yet.
+  asioDriver?: string;
+  asioDsdMode?: AsioDsdMode;
+  asioChannels?: AsioChannelMap;
+  asioBuffer?: number;
   handleTrackEnded: () => void;
   // Called when mpv advances to an entry that was appended for gapless
   // playback. The native engine owns the transition, but React still needs
@@ -371,8 +377,16 @@ export function useAudioEngine(options: {
       dsdPlayback: options.dsdPlayback,
       dsdPcmRate: options.dsdPcmRate,
       dsdExclusive: options.dsdExclusive,
+      asioDriver: options.asioDriver,
+      asioDsdMode: options.asioDsdMode,
+      asioChannels: options.asioChannels,
+      asioBuffer: options.asioBuffer,
     });
   }, [
+    options.asioBuffer,
+    options.asioChannels,
+    options.asioDriver,
+    options.asioDsdMode,
     options.audioOutputMode,
     options.dsdExclusive,
     options.dsdPlayback,

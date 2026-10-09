@@ -42,6 +42,8 @@ import {
   splitArtistNames,
   writeCachedPlayerState,
   type AudioOutputMode,
+  type AsioChannelMap,
+  type AsioDsdMode,
   type CoverPalette,
   type PlayerSideView,
   type QualityLevel,
@@ -153,9 +155,44 @@ export default function App() {
   const [dsdPlayback, setDsdPlayback] = useState<DsdPlaybackMode>(() => readCachedAudioSettings().dsdPlayback ?? "d2p");
   const [dsdPcmRate, setDsdPcmRate] = useState<DsdPcmRate>(() => readCachedAudioSettings().dsdPcmRate ?? "auto");
   const [dsdExclusive, setDsdExclusive] = useState(() => readCachedAudioSettings().dsdExclusive ?? true);
+  const [asioDrivers, setAsioDrivers] = useState<
+    Array<{ name: string; clsid: string | null; description: string; bits: number }>
+  >([]);
+  const [asioDriver, setAsioDriver] = useState(() => readCachedAudioSettings().asioDriver ?? "");
+  const [asioDsdMode, setAsioDsdMode] = useState<AsioDsdMode>(
+    () => readCachedAudioSettings().asioDsdMode ?? "native",
+  );
+  const [asioChannels, setAsioChannels] = useState<AsioChannelMap>(
+    () => readCachedAudioSettings().asioChannels ?? { left: 0, right: 1 },
+  );
+  const [asioBuffer, setAsioBuffer] = useState(() => readCachedAudioSettings().asioBuffer ?? 512);
   const [equalizer, setEqualizer] = useState<EqualizerSettings>(readCachedEqualizerSettings);
   const [equalizerPresets, setEqualizerPresets] = useState<EqualizerCustomPreset[]>(readCachedEqualizerPresets);
   const [equalizerOpen, setEqualizerOpen] = useState(false);
+
+  // ASIO drivers are read from the registry by the main process. The list is
+  // only used by the settings card, so one fetch on mount is enough; when the
+  // saved driver is gone the decoder's own driver is preferred.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const drivers = (await window.ariaDesktop?.asio?.listDrivers?.()) ?? [];
+        if (cancelled || drivers.length === 0) return;
+        setAsioDrivers(drivers);
+        setAsioDriver((current) => {
+          if (current && drivers.some((driver) => driver.name === current)) return current;
+          const preferred = drivers.find((driver) => /tempo|serenade|dsd/i.test(driver.name)) ?? drivers[0];
+          return preferred?.name ?? current;
+        });
+      } catch {
+        // No ASIO drivers installed: the card shows the empty state.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navCloseTimer = useRef<number | null>(null);
@@ -496,6 +533,10 @@ export default function App() {
     dsdPcmRate,
     dsdExclusive,
     dsdPlayback,
+    asioDriver,
+    asioDsdMode,
+    asioChannels,
+    asioBuffer,
     handleTrackEnded,
     handleNativeTrackAdvanced,
     pickRelativeTrack,
@@ -506,7 +547,6 @@ export default function App() {
   const visualizerPlaying = nativePlaybackEnabled
     ? Boolean(playing || (nativeAudioState?.active && !nativeAudioState.paused))
     : playing;
-
   // Live description of the DSD path: native DoP while the packed stream is
   // playing, otherwise the plain DSD-to-PCM decode.
   const dsdLiveLabel = nativeAudioState?.dop?.active
@@ -2156,6 +2196,15 @@ export default function App() {
                 dsdExclusive={dsdExclusive}
                 onDsdExclusiveChange={setDsdExclusive}
                 dsdLiveLabel={dsdLiveLabel}
+                asioDrivers={asioDrivers}
+                asioDriver={asioDriver}
+                onAsioDriverChange={setAsioDriver}
+                asioDsdMode={asioDsdMode}
+                onAsioDsdModeChange={setAsioDsdMode}
+                asioChannels={asioChannels}
+                onAsioChannelsChange={setAsioChannels}
+                asioBuffer={asioBuffer}
+                onAsioBufferChange={setAsioBuffer}
                 keyboardShortcuts={keyboardShortcuts}
                 onKeyboardShortcutsChange={setKeyboardShortcuts}
                 perfMode={perfMode}

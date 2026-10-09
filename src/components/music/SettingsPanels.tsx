@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Metric } from "@/components/music/shared";
 import { api, type DiagnosticsStats, type NeteaseAccountSummary, type NeteaseQrStart, type RuntimeInfo } from "@/lib/api";
 import type { NativeAudioState } from "@/lib/audioTypes";
-import type { AudioOutputMode, DsdPcmRate, DsdPlaybackMode } from "@/lib/playerPresentation";
-import { dsdPcmRateLabels } from "@/lib/playerPresentation";
+import type { AsioChannelMap, AsioDsdMode, AudioOutputMode, DsdPcmRate, DsdPlaybackMode } from "@/lib/playerPresentation";
+import { asioBufferSizes, asioDsdModeLabels, dsdPcmRateLabels } from "@/lib/playerPresentation";
 import {
   defaultKeyboardShortcuts,
   formatShortcut,
@@ -74,6 +74,15 @@ export function SettingsPanel({
   dsdExclusive,
   onDsdExclusiveChange,
   dsdLiveLabel,
+  asioDrivers,
+  asioDriver,
+  onAsioDriverChange,
+  asioDsdMode,
+  onAsioDsdModeChange,
+  asioChannels,
+  onAsioChannelsChange,
+  asioBuffer,
+  onAsioBufferChange,
   keyboardShortcuts,
   onKeyboardShortcutsChange,
   perfMode,
@@ -111,6 +120,16 @@ export function SettingsPanel({
   onDsdExclusiveChange: (value: boolean) => void;
   /** Live path label, e.g. "原生 DoP · DSD128" while such a stream plays. */
   dsdLiveLabel?: string | null;
+  /** ASIO drivers found in HKLM\SOFTWARE\ASIO (read from the main process). */
+  asioDrivers: Array<{ name: string; clsid: string | null; description: string; bits: number }>;
+  asioDriver: string;
+  onAsioDriverChange: (value: string) => void;
+  asioDsdMode: AsioDsdMode;
+  onAsioDsdModeChange: (value: AsioDsdMode) => void;
+  asioChannels: AsioChannelMap;
+  onAsioChannelsChange: (value: AsioChannelMap) => void;
+  asioBuffer: number;
+  onAsioBufferChange: (value: number) => void;
   keyboardShortcuts: KeyboardShortcuts;
   onKeyboardShortcutsChange: (shortcuts: KeyboardShortcuts) => void;
   perfMode?: boolean;
@@ -125,6 +144,10 @@ export function SettingsPanel({
   const exclusiveReady = Boolean(exclusiveMode && nativeAudioSupported && nativeAudioState?.exclusive);
   const outputModeLabel =
     audioOutputMode === "exclusive" ? "WASAPI Exclusive" : audioOutputMode === "shared" ? "WASAPI Shared" : "System";
+
+  const activeAsioDriver = asioDrivers.find((driver) => driver.name === asioDriver) ?? null;
+  const asioDriverActive = Boolean(activeAsioDriver);
+  const asioDriverBits = activeAsioDriver?.bits ?? 64;
 
   const [diagOpen, setDiagOpen] = useState(false);
   const [diagStats, setDiagStats] = useState<DiagnosticsStats | null>(null);
@@ -340,6 +363,122 @@ export function SettingsPanel({
                 <LogOut />
                 退出登录
               </Button>
+            )}
+          </section>
+
+          {/* ASIO lives directly under the account card: it is the other
+              "how does audio leave this machine" setting and mirrors the
+              channel-mapping dialog foobar2000 uses for the same driver. */}
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">ASIO</p>
+                <h3 className="mt-1 text-base font-semibold">声道映射</h3>
+              </div>
+              <Badge>{asioDriverActive ? `${asioDriverBits} 位` : "未选择"}</Badge>
+            </div>
+
+            {asioDrivers.length === 0 ? (
+              <p className="mt-3 rounded-[1rem] bg-neutral-950/[0.03] p-3 text-xs leading-5 text-neutral-500">
+                没有检测到已安装的 ASIO 驱动。装上解码器自带的 ASIO 驱动后会出现在这里。
+              </p>
+            ) : (
+              <>
+                <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                  驱动
+                </label>
+                <select
+                  value={asioDriver}
+                  onChange={(event) => onAsioDriverChange(event.target.value)}
+                  className="mt-2 w-full rounded-[1rem] border border-white/72 bg-white/80 px-3 py-2 text-sm font-medium text-neutral-800 shadow-sm outline-none focus:border-neutral-950"
+                >
+                  {asioDrivers.map((driver) => (
+                    <option key={`${driver.bits}-${driver.name}`} value={driver.name}>
+                      {driver.name}
+                      {driver.bits === 32 ? "（32 位）" : ""}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {(["left", "right"] as const).map((side) => (
+                    <div key={side}>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">
+                        {side === "left" ? "左声道" : "右声道"}
+                      </p>
+                      <select
+                        value={asioChannels[side]}
+                        onChange={(event) =>
+                          onAsioChannelsChange({ ...asioChannels, [side]: Number(event.target.value) })
+                        }
+                        className="mt-2 w-full rounded-[1rem] border border-white/72 bg-white/80 px-3 py-2 text-sm font-medium text-neutral-800 shadow-sm outline-none focus:border-neutral-950"
+                      >
+                        {Array.from({ length: 8 }, (_, index) => (
+                          <option key={index} value={index}>
+                            通道 {index + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">DSD 输出</p>
+                  <Badge>{asioDsdModeLabels[asioDsdMode]}</Badge>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(Object.keys(asioDsdModeLabels) as AsioDsdMode[]).map((mode) => {
+                    const active = asioDsdMode === mode;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => onAsioDsdModeChange(mode)}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                          active
+                            ? "border-neutral-950 bg-neutral-950 text-white"
+                            : "border-white/72 bg-white/72 text-neutral-600 hover:bg-white",
+                        )}
+                      >
+                        {asioDsdModeLabels[mode]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-neutral-400">缓冲</p>
+                  <Badge>{asioBuffer} 采样</Badge>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {asioBufferSizes.map((size) => {
+                    const active = asioBuffer === size;
+                    return (
+                      <button
+                        key={size}
+                        type="button"
+                        onClick={() => onAsioBufferChange(size)}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                          active
+                            ? "border-neutral-950 bg-neutral-950 text-white"
+                            : "border-white/72 bg-white/72 text-neutral-600 hover:bg-white",
+                        )}
+                      >
+                        {size}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <p className="mt-4 text-xs leading-5 text-neutral-500">
+                  ASIO 直接对接解码器驱动，绕开 Windows 音频栈，是原生 DSD（5.6 MHz 及以上）的唯一通路。
+                  这里的映射与 foobar2000 的「声道映射」含义相同；Aria 的 ASIO 输出引擎正在接入，
+                  本页配置会立即保存并生效。
+                </p>
+              </>
             )}
           </section>
 

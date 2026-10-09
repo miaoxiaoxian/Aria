@@ -9,6 +9,19 @@ export type AudioOutputMode = "system" | "shared" | "exclusive";
 export type DsdPlaybackMode = "d2p" | "dop";
 /** Output rate used when DSD is decoded to PCM; "auto" follows the source. */
 export type DsdPcmRate = "auto" | "44100" | "88200" | "176400";
+/** How the ASIO output should deliver DSD to the driver. */
+export type AsioDsdMode = "native" | "dop" | "pcm";
+
+/** Channel mapping for the ASIO output: which device channel carries L and R. */
+export type AsioChannelMap = { left: number; right: number };
+
+export const asioDsdModeLabels: Record<AsioDsdMode, string> = {
+  native: "原生 DSD",
+  dop: "DoP 封装",
+  pcm: "转 PCM",
+};
+
+export const asioBufferSizes = [128, 256, 512, 1024, 2048] as const;
 
 export const dsdPcmRateLabels: Record<DsdPcmRate, string> = {
   auto: "自动（跟随源）",
@@ -270,6 +283,10 @@ export function readCachedAudioSettings() {
       dsdPlayback?: DsdPlaybackMode;
       dsdPcmRate?: DsdPcmRate;
       dsdExclusive?: boolean;
+      asioDriver?: string;
+      asioDsdMode?: AsioDsdMode;
+      asioBuffer?: number;
+      asioChannels?: { left?: number; right?: number };
     };
     const outputMode =
       parsed.outputMode === "shared" || parsed.outputMode === "exclusive" || parsed.outputMode === "system"
@@ -290,6 +307,17 @@ export function readCachedAudioSettings() {
       dsdPlayback: parsed.dsdPlayback === "dop" ? "dop" : "d2p",
       dsdPcmRate,
       dsdExclusive: typeof parsed.dsdExclusive === "boolean" ? parsed.dsdExclusive : true,
+      asioDriver: typeof parsed.asioDriver === "string" ? parsed.asioDriver : "",
+      asioDsdMode:
+        parsed.asioDsdMode === "native" || parsed.asioDsdMode === "dop" ? parsed.asioDsdMode : "native",
+      asioBuffer:
+        typeof parsed.asioBuffer === "number" && (asioBufferSizes as readonly number[]).includes(parsed.asioBuffer)
+          ? parsed.asioBuffer
+          : 512,
+      asioChannels: {
+        left: typeof parsed.asioChannels?.left === "number" ? parsed.asioChannels.left : 0,
+        right: typeof parsed.asioChannels?.right === "number" ? parsed.asioChannels.right : 1,
+      },
     };
   } catch {
     return {};
@@ -305,6 +333,10 @@ export function writeCachedAudioSettings(settings: {
   dsdPlayback?: DsdPlaybackMode;
   dsdPcmRate?: DsdPcmRate;
   dsdExclusive?: boolean;
+  asioDriver?: string;
+  asioDsdMode?: AsioDsdMode;
+  asioBuffer?: number;
+  asioChannels?: AsioChannelMap;
 }) {
   try {
     window.localStorage.setItem(audioSettingsKey, JSON.stringify(settings));

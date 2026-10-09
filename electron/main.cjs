@@ -972,6 +972,67 @@ ipcMain.handle("aria:native-audio:supported", () => {
   return getNativeAudioEngine().isSupported();
 });
 
+// ASIO drivers register themselves under HKLM\SOFTWARE\ASIO with a CLSID;
+// 32-bit-only drivers land in the WOW6432Node mirror. Both views are listed so
+// the channel-mapping card targets the same driver foobar2000 uses.
+function listAsioDrivers() {
+  // reg.exe prints the full hive name (HKEY_LOCAL_MACHINE\...), so the query
+  // path and the line prefix have to match that form.
+  const roots = [
+    { hive: "HKEY_LOCAL_MACHINE\\SOFTWARE\\ASIO", bits: 64 },
+    { hive: "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\ASIO", bits: 32 },
+  ];
+  const drivers = [];
+  for (const { hive, bits } of roots) {
+    let names = [];
+    try {
+      names = execFileSync("reg", ["query", hive], { encoding: "utf8", windowsHide: true })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(`${hive}\\`))
+        .map((line) => line.slice(hive.length + 1))
+        .filter((name) => name && !name.includes("\\"));
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      let clsid = null;
+      let description = "";
+      try {
+        const output = execFileSync("reg", ["query", `${hive}\\${name}`, "/v", "CLSID"], {
+          encoding: "utf8",
+          windowsHide: true,
+        });
+        clsid = (output.match(/CLSID\s+REG_SZ\s+(\{[0-9A-Fa-f-]+\})/) ?? [])[1] ?? null;
+      } catch {
+        clsid = null;
+      }
+      try {
+        const output = execFileSync("reg", ["query", `${hive}\\${name}`, "/v", "Description"], {
+          encoding: "utf8",
+          windowsHide: true,
+        });
+        description = (output.match(/Description\s+REG_SZ\s+(.+)/) ?? [])[1]?.trim() ?? "";
+      } catch {
+        description = "";
+      }
+      if (!drivers.some((driver) => driver.clsid && driver.clsid === clsid)) {
+        drivers.push({ name, clsid, description, bits });
+      }
+    }
+  }
+  return drivers;
+}
+
+ipcMain.handle("aria:asio:drivers", () => {
+  try {
+    return listAsioDrivers();
+  } catch (error) {
+    writeLog("desktop.log", `ASIO driver enumeration failed: ${error?.message ?? error}`);
+    return [];
+  }
+});
+
 ipcMain.handle("aria:native-audio:devices", async () => {
   return getNativeAudioEngine().listDevices();
 });

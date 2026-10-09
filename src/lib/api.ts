@@ -3,6 +3,11 @@ import type { LyricCandidate, LyricLine } from "@/data/music";
 declare global {
   interface Window {
     ariaDesktop?: {
+      asio?: {
+        listDrivers?: () => Promise<
+          Array<{ name: string; clsid: string | null; description: string; bits: number }>
+        >;
+      };
       nativeAudio?: {
         supported?: boolean;
         isSupported?: () => Promise<boolean>;
