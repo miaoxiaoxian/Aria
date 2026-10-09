@@ -2,6 +2,7 @@ const { execFile, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const net = require("node:net");
+const os = require("node:os");
 const path = require("node:path");
 const { CdAudioRipper } = require("./cdAudioRipper.cjs");
 const dopCodec = require("./dopCodec.cjs");
@@ -19,7 +20,7 @@ const NATIVE_AUDIO_PROCESS_NAME = `${NATIVE_AUDIO_CLIENT_NAME}.exe`;
 // 352.8 kHz and destroys the DoP markers (audible as hiss). The two values are
 // consequently passed at process start and the process is restarted when they
 // change.
-function buildMpvArguments(pipePath, { exclusive = false, deviceId = "auto" } = {}) {
+function buildMpvArguments(pipePath, { exclusive = false, deviceId = "auto", logFile = null } = {}) {
   return [
     "--idle=yes",
     "--ao=wasapi",
@@ -27,6 +28,10 @@ function buildMpvArguments(pipePath, { exclusive = false, deviceId = "auto" } = 
     "--force-window=no",
     "--keep-open=no",
     "--no-terminal",
+    // `--no-terminal` also silences stdout/stderr, which hides every audio
+    // output error. The log file keeps them inspectable (DoP/DSD diagnosis
+    // depends on it).
+    ...(logFile ? [`--log-file=${logFile}`] : []),
     // Keep the Windows audio session stable for application-loopback tools.
     `--audio-client-name=${NATIVE_AUDIO_CLIENT_NAME}`,
     "--audio-set-media-role=yes",
@@ -202,7 +207,10 @@ class MpvAudioEngine {
 
       const child = spawn(
         this.resolveExecutable(),
-        buildMpvArguments(this.pipePath, this.spawnOutput),
+        buildMpvArguments(this.pipePath, {
+          ...this.spawnOutput,
+          logFile: path.join(os.tmpdir(), "aria-mpv.log"),
+        }),
         {
           windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"],
@@ -963,7 +971,11 @@ class MpvAudioEngine {
     this.loadToken += 1;
     this.pendingAutoAdvance = null;
     this.state.dop = null;
-    void this.dropDopStream();
+    // NOTE: the prepared DoP stream is deliberately kept. teardown() also runs
+    // during the output-change restart that performLoad performs *before* it
+    // loads the stream, and deleting it there made mpv fail with
+    // "Cannot open file ... No such file or directory". stop() and the next
+    // prepareDopLoad sweep are the places that remove it.
     this.rejectPending(new Error("Native audio engine is being restarted."));
     if (this.socket && !this.socket.destroyed) {
       this.socket.destroy();
