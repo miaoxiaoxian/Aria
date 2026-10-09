@@ -538,9 +538,18 @@ export function useAudioEngine(options: {
   useEffect(() => {
     const nativeAudio = window.ariaDesktop?.nativeAudio;
     if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
+    // A changed output format reloads the track, so remember where we are and
+    // resume there instead of jumping back to the start.
     options.pendingSeekRef.current = getPlaybackTime();
     nativeLoadedUrlRef.current = null;
-  }, [options.exclusiveMode, nativePlaybackEnabled, selectedSinkId]);
+  }, [
+    options.dsdExclusive,
+    options.dsdPcmRate,
+    options.dsdPlayback,
+    options.exclusiveMode,
+    nativePlaybackEnabled,
+    selectedSinkId,
+  ]);
 
   useEffect(() => {
     const nativeAudio = window.ariaDesktop?.nativeAudio;
@@ -559,6 +568,13 @@ export function useAudioEngine(options: {
       options.activeTrack.nativeStart ?? "",
       options.activeTrack.nativeEnd ?? "",
       options.activeTrack.cdReadQuality ?? "high",
+      // The DoP/D2P decision and the pinned output rate change what mpv is
+      // asked to do, so they belong in the key: without them, flipping the DSD
+      // card while a track is playing would keep the old path until the next
+      // track.
+      dsdOutput.preferDop ? "dop" : "pcm",
+      String(dsdOutput.samplerate),
+      dsdOutput.exclusive ? "exclusive" : "shared",
     ].join("\u0000");
     // A gapless advance is already loaded by mpv before React adopts the new
     // track id. Replacing that URL here would restart the song at zero and
@@ -861,6 +877,9 @@ export function useAudioEngine(options: {
       options.activeTrack.nativeStart ?? "",
       options.activeTrack.nativeEnd ?? "",
       options.activeTrack.cdReadQuality ?? "high",
+      dsdOutput.preferDop ? "dop" : "pcm",
+      String(dsdOutput.samplerate),
+      dsdOutput.exclusive ? "exclusive" : "shared",
     ].join("\u0000");
     nativeLoadedUrlRef.current = nextLoadKey;
     options.pendingSeekRef.current = 0;

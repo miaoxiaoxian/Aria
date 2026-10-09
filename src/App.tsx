@@ -1880,6 +1880,7 @@ export default function App() {
                   playing={playing}
                   visualizerPlaying={visualizerPlaying}
                   visualizerNote={spectrumNote}
+                  dsdLabel={dsdLiveLabel}
                   shuffleEnabled={shuffleEnabled}
                   repeatMode={repeatMode}
                   onTogglePlay={togglePlayback}

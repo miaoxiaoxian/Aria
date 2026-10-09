@@ -73,6 +73,7 @@ export function PlayerSurface({
   onQualityLevelChange,
   hifiEnabled,
   exclusiveMode,
+  dsdLabel,
   durationSeconds,
   analyserRef,
   visualizerMode,
@@ -106,6 +107,8 @@ export function PlayerSurface({
   onQualityLevelChange: (level: QualityLevel) => void;
   hifiEnabled: boolean;
   exclusiveMode: boolean;
+  /** Live DSD path, e.g. "原生 DoP · DSD128" or "DSD → PCM（D2P）". */
+  dsdLabel?: string | null;
   durationSeconds: number;
   analyserRef: { current: AnalyserNode | null };
   visualizerMode: AudioOutputMode;
@@ -254,6 +257,7 @@ export function PlayerSurface({
                 <Badge>{activeTrack.duration}</Badge>
                 {hifiEnabled && <Badge>HiFi</Badge>}
                 {exclusiveMode && <Badge>直通</Badge>}
+                {dsdLabel && <Badge>{dsdLabel}</Badge>}
               </div>
               <Button
                 variant="glass"
