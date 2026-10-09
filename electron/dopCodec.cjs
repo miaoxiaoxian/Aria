@@ -155,13 +155,21 @@ function buildWavHeader(dataBytes, { channels = 2, sampleRate, bitsPerSample = 2
   return header;
 }
 
-/** One 24-bit DoP frame: 16 DSD bits in the low bytes, marker on top. */
+/**
+ * One 24-bit DoP frame. Byte order and marker placement follow the reference
+ * implementation in the Linux kernel (sound/usb/pcm.c), whose layout is:
+ *
+ *     L1 L2 0x05   R1 R2 0x05   L3 L4 0xfa   R3 R4 0xfa
+ *
+ * i.e. the earliest DSD byte lands in the LOW byte, the next one in the middle
+ * byte, the marker in the high byte, and **both channels of a frame share the
+ * same marker** - the marker only advances from frame to frame. Alternating it
+ * per interleaved sample (L=0x05, R=0xfa, ...) makes each channel's own marker
+ * sequence constant, which a DoP-aware DAC rejects by muting.
+ */
 function writeDopFrame(target, at, first, second, lsbFirst, marker) {
-  const high = lsbFirst ? BIT_REVERSE[first] : first;
-  const low = lsbFirst ? BIT_REVERSE[second] : second;
-  const payload = (high << 8) | low;
-  target[at] = payload & 0xff;
-  target[at + 1] = (payload >> 8) & 0xff;
+  target[at] = lsbFirst ? BIT_REVERSE[first] : first;
+  target[at + 1] = lsbFirst ? BIT_REVERSE[second] : second;
   target[at + 2] = marker;
 }
 
@@ -199,11 +207,13 @@ async function encodeDopWav(sourcePath, layout, targetPath, onProgress) {
         if (frames <= 0) break;
         let cursor = 0;
         for (let frame = 0; frame < frames; frame += 1) {
+          const marker = DOP_MARKERS[frameIndex & 1];
           for (let channel = 0; channel < channels; channel += 1) {
             const base = channel * blockBytes + frame * 2;
-            writeDopFrame(pack, cursor, region[base], region[base + 1], layout.lsbFirst, DOP_MARKERS[frameIndex++ & 1]);
+            writeDopFrame(pack, cursor, region[base], region[base + 1], layout.lsbFirst, marker);
             cursor += 3;
           }
+          frameIndex += 1;
         }
         await target.write(pack.subarray(0, cursor));
         writtenFrames += frames;
@@ -226,14 +236,16 @@ async function encodeDopWav(sourcePath, layout, targetPath, onProgress) {
         const frames = Math.min(Math.floor(bytesRead / framesPerSourceFrame), totalFrames - writtenFrames);
         let cursor = 0;
         for (let frame = 0; frame < frames; frame += 1) {
+          const marker = DOP_MARKERS[frameIndex & 1];
           for (let channel = 0; channel < channels; channel += 1) {
             // Bytes are interleaved one sample per channel: the two DSD bytes
             // of a frame sit `channels` bytes apart.
             const first = frame * 2 * channels + channel;
             const second = first + channels;
-            writeDopFrame(pack, cursor, buffer[first], buffer[second], layout.lsbFirst, DOP_MARKERS[frameIndex++ & 1]);
+            writeDopFrame(pack, cursor, buffer[first], buffer[second], layout.lsbFirst, marker);
             cursor += 3;
           }
+          frameIndex += 1;
         }
         await target.write(pack.subarray(0, cursor));
         writtenFrames += frames;

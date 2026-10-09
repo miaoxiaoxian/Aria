@@ -99,12 +99,15 @@ describe("DoP codec", () => {
     expect(wav.readUInt32LE(24)).toBe(176_400);
     expect(wav.readUInt16LE(34)).toBe(24);
     for (let frame = 0; frame < FRAMES; frame += 1) {
+      // Both channels of a frame share the marker; it advances per frame.
+      const marker = MARKERS[frame & 1];
       for (let channel = 0; channel < 2; channel += 1) {
         const at = 44 + (frame * 2 + channel) * 3;
         const sourceBytes = channel === 0 ? left : right;
-        const expected = (reverseBits(sourceBytes[frame * 2]) << 8) | reverseBits(sourceBytes[frame * 2 + 1]);
+        // Low byte carries the earliest DSD byte (after the LSB-first bit flip).
+        const expected = (reverseBits(sourceBytes[frame * 2 + 1]) << 8) | reverseBits(sourceBytes[frame * 2]);
         expect(wav[at] | (wav[at + 1] << 8)).toBe(expected);
-        expect(wav[at + 2]).toBe(MARKERS[(frame * 2 + channel) & 1]);
+        expect(wav[at + 2]).toBe(marker);
       }
     }
   });
@@ -120,12 +123,14 @@ describe("DoP codec", () => {
 
     const wav = readFileSync(target);
     for (let frame = 0; frame < FRAMES; frame += 1) {
+      const marker = MARKERS[frame & 1];
       for (let channel = 0; channel < 2; channel += 1) {
         const at = 44 + (frame * 2 + channel) * 3;
         const sourceBytes = channel === 0 ? left : right;
-        const expected = (sourceBytes[frame * 2] << 8) | sourceBytes[frame * 2 + 1];
+        // MSB-first source: the earliest byte still lands in the low byte.
+        const expected = (sourceBytes[frame * 2 + 1] << 8) | sourceBytes[frame * 2];
         expect(wav[at] | (wav[at + 1] << 8)).toBe(expected);
-        expect(wav[at + 2]).toBe(MARKERS[(frame * 2 + channel) & 1]);
+        expect(wav[at + 2]).toBe(marker);
       }
     }
   });
