@@ -12,7 +12,14 @@ const dopCodec = require("./dopCodec.cjs");
 const NATIVE_AUDIO_CLIENT_NAME = "Aria";
 const NATIVE_AUDIO_PROCESS_NAME = `${NATIVE_AUDIO_CLIENT_NAME}.exe`;
 
-function buildMpvArguments(pipePath) {
+// mpv reads `audio-exclusive` and `audio-device` when it creates the audio
+// output, and `--gapless-audio` keeps that output alive between files. Setting
+// them over IPC while a process is running is therefore not enough: a DoP
+// stream could still be routed through the shared mixer, which resamples
+// 352.8 kHz and destroys the DoP markers (audible as hiss). The two values are
+// consequently passed at process start and the process is restarted when they
+// change.
+function buildMpvArguments(pipePath, { exclusive = false, deviceId = "auto" } = {}) {
   return [
     "--idle=yes",
     "--ao=wasapi",
@@ -25,7 +32,8 @@ function buildMpvArguments(pipePath) {
     "--audio-set-media-role=yes",
     `--title=${NATIVE_AUDIO_CLIENT_NAME}`,
     `--force-media-title=${NATIVE_AUDIO_CLIENT_NAME}`,
-    "--audio-exclusive=no",
+    `--audio-exclusive=${exclusive ? "yes" : "no"}`,
+    `--audio-device=${deviceId || "auto"}`,
     "--msg-level=all=warn",
     "--no-config",
     "--cache=yes",
@@ -98,6 +106,11 @@ class MpvAudioEngine {
     // Volume the application asked for; while DoP is active mpv is pinned to
     // 100 % and this is what gets restored afterwards.
     this.requestedVolume = null;
+    // Output parameters the running mpv process was started with. mpv only
+    // reads them when the audio output is created, so a change means the
+    // process has to be restarted (see buildMpvArguments).
+    this.spawnOutput = { exclusive: false, deviceId: "auto" };
+    this.desiredOutput = { exclusive: false, deviceId: "auto" };
     this.state = {
       supported: this.isSupported(),
       ready: false,
@@ -185,20 +198,25 @@ class MpvAudioEngine {
 
       this.pipePath = `\\\\.\\pipe\\aria-mpv-${process.pid}-${Date.now()}`;
       this.buffer = "";
+      this.spawnOutput = { ...this.desiredOutput };
 
-      this.process = spawn(
+      const child = spawn(
         this.resolveExecutable(),
-        buildMpvArguments(this.pipePath),
+        buildMpvArguments(this.pipePath, this.spawnOutput),
         {
           windowsHide: true,
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      this.process = child;
 
-      this.process.stdout?.on("data", (chunk) => this.writeLog("native-audio.log", String(chunk).trimEnd()));
-      this.process.stderr?.on("data", (chunk) => this.writeLog("native-audio.log", `ERR ${String(chunk).trimEnd()}`));
-      this.process.once("exit", (code, signal) => {
+      child.stdout?.on("data", (chunk) => this.writeLog("native-audio.log", String(chunk).trimEnd()));
+      child.stderr?.on("data", (chunk) => this.writeLog("native-audio.log", `ERR ${String(chunk).trimEnd()}`));
+      child.once("exit", (code, signal) => {
         this.writeLog("native-audio.log", `mpv exited: code=${code} signal=${signal}`);
+        // A restart kills the previous process while a replacement is already
+        // running; only the current process may clear the shared state.
+        if (this.process !== child) return;
         this.process = null;
         this.socket = null;
         this.state.ready = false;
@@ -448,6 +466,35 @@ class MpvAudioEngine {
   }
 
   async applyOutputSettings({ exclusive, deviceId, volume, samplerate }) {
+    // mpv only honours audio-exclusive / audio-device when the audio output is
+    // created, so a change of either means a fresh process. performLoad clears
+    // `active` before calling this, which makes the restart inaudible; while a
+    // track really is playing only the properties are updated and the next load
+    // picks the new process up.
+    const wantsExclusive = typeof exclusive === "boolean" ? exclusive : this.desiredOutput.exclusive;
+    const wantsDevice = typeof deviceId === "string" ? this.normalizeDeviceId(deviceId) : this.desiredOutput.deviceId;
+    if (wantsExclusive !== this.desiredOutput.exclusive || wantsDevice !== this.desiredOutput.deviceId) {
+      this.desiredOutput = { exclusive: wantsExclusive, deviceId: wantsDevice };
+      if (!this.state.active) {
+        const changed = wantsExclusive !== this.spawnOutput.exclusive || wantsDevice !== this.spawnOutput.deviceId;
+        if (changed) {
+          this.writeLog(
+            "native-audio.log",
+            `restarting mpv for output change: exclusive=${wantsExclusive} device=${wantsDevice}`,
+          );
+          // teardown() clears the DoP state and invalidates the in-flight load
+          // token; both must survive the restart or performLoad would abort as
+          // "superseded" and the track would never start.
+          const dopState = this.state.dop;
+          const loadToken = this.loadToken;
+          await this.teardown();
+          await this.ensureProcess();
+          this.loadToken = loadToken;
+          this.state.dop = dopState;
+        }
+      }
+    }
+
     await this.ensureProcess();
     if (typeof volume === "number") {
       const requested = Math.max(0, Math.min(100, Number(volume) || 0));
