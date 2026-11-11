@@ -1,5 +1,28 @@
 export const equalizerFrequencies = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000] as const;
 
+export const equalizer31Frequencies = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
+export function frequenciesForBands(bands: readonly number[]) { return bands.length === 31 ? equalizer31Frequencies : [...equalizerFrequencies]; }
+export function resampleBands(values: number[], from: readonly number[], to: readonly number[]) {
+  return to.map(f => { let hi=from.findIndex(x=>x>=f); if(hi<0)hi=from.length-1; if(hi===0)return Number(values[0])||0;const lo=hi-1;const t=Math.max(0,Math.min(1,Math.log(f/from[lo])/Math.log(from[hi]/from[lo])));return Math.round(((Number(values[lo])||0)*(1-t)+(Number(values[hi])||0)*t)*2)/2; });
+}
+const legacy18 = [55,77,110,156,220,331,440,622,880,1200,1800,2500,3500,5000,7000,10000,14000,20000];
+function migrateStorage() {
+  const storage=window.localStorage;
+  const raw=storage.getItem("aria-equalizer-settings");
+  if(raw && !storage.getItem(equalizerStorageKey)) {
+    const old=JSON.parse(raw);const curves={"10":resampleBands(old.gains?.["18"]??[],legacy18,equalizerFrequencies),"31":sanitizeEqualizerBands(Array.isArray(old.gains)?old.gains:(old.gains?.["31"]??Array(31).fill(0)))};
+    if(!storage.getItem("aria-equalizer-settings-backup-18"))storage.setItem("aria-equalizer-settings-backup-18",raw);
+    storage.setItem("aria-equalizer-layout-curves-v2",JSON.stringify(curves));
+    storage.setItem(equalizerStorageKey,JSON.stringify({enabled:!!old.enabled,preset:"custom",bands:old.mode==="18"?curves["10"]:curves["31"]}));
+  }
+  const presets=storage.getItem("aria-equalizer-presets");
+  if(presets && !storage.getItem(equalizerPresetsStorageKey)) {
+    const old=JSON.parse(presets);if(!Array.isArray(old))return;
+    if(!storage.getItem("aria-equalizer-presets-backup-18"))storage.setItem("aria-equalizer-presets-backup-18",presets);
+    storage.setItem(equalizerPresetsStorageKey,JSON.stringify(old.map(p=>({...p,bands:p.mode==="18"?resampleBands(p.gains??[],legacy18,equalizerFrequencies):sanitizeEqualizerBands(p.gains)}))));
+  }
+}
+
 export type EqualizerPresetId = "flat" | "pop" | "rock" | "vocal" | "bass" | "night" | "custom";
 
 export type EqualizerSettings = {
@@ -22,7 +45,7 @@ export const maxEqualizerGain = 12;
 
 export function sanitizeEqualizerBands(value: unknown): number[] {
   const source = Array.isArray(value) ? value : [];
-  return equalizerFrequencies.map((_, index) => {
+  return (source.length === 31 ? equalizer31Frequencies : equalizerFrequencies).map((_, index) => {
     const gain = Number(source[index]);
     if (!Number.isFinite(gain)) return 0;
     return Math.max(-maxEqualizerGain, Math.min(maxEqualizerGain, Math.round(gain * 10) / 10));
@@ -39,6 +62,7 @@ export function defaultEqualizerSettings(): EqualizerSettings {
 
 export function readCachedEqualizerSettings(): EqualizerSettings {
   try {
+    migrateStorage();
     const raw = window.localStorage.getItem(equalizerStorageKey);
     if (!raw) return defaultEqualizerSettings();
     const parsed = JSON.parse(raw) as Partial<EqualizerSettings>;
@@ -116,6 +140,7 @@ export function sanitizeEqualizerCustomPresets(value: unknown): EqualizerCustomP
 
 export function readCachedEqualizerPresets(): EqualizerCustomPreset[] {
   try {
+    migrateStorage();
     const raw = window.localStorage.getItem(equalizerPresetsStorageKey);
     if (!raw) return [];
     return sanitizeEqualizerCustomPresets(JSON.parse(raw));
@@ -149,7 +174,13 @@ export function equalizerPresetExportPayload(presets: EqualizerCustomPreset[]) {
   }, null, 2);
 }
 
-export function parseEqualizerPresetImport(raw: unknown): { presets: EqualizerCustomPreset[]; error: string | null } {
+export function parseEqualizerPresetImport(raw: unknown, bandCount = 10): { presets: EqualizerCustomPreset[]; error: string | null } {
+  const target = bandCount === 31 ? equalizer31Frequencies : equalizerFrequencies;
+  if (typeof raw === "string" && /graphiceq:/i.test(raw)) {
+    const pairs = [...raw.matchAll(/(\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/g)].map(m=>({frequency:Number(m[1]),gain:Number(m[2])})).filter(p=>p.frequency>=10&&p.frequency<=24000&&Math.abs(p.gain)<=40).sort((a,b)=>a.frequency-b.frequency);
+    if (pairs.length < 2) return {presets:[],error:"GraphicEQ 至少需要两个有效频点。"};
+    return {presets:[createEqualizerCustomPreset("GraphicEQ 导入",resampleBands(pairs.map(p=>p.gain),pairs.map(p=>p.frequency),target))],error:null};
+  }
   let parsed: unknown = raw;
   if (typeof raw === "string") {
     try {
@@ -157,6 +188,15 @@ export function parseEqualizerPresetImport(raw: unknown): { presets: EqualizerCu
     } catch {
       return { presets: [], error: "文件不是有效的 JSON，请选择 Aria 导出的均衡器预设文件。" };
     }
+  }
+  if (parsed && typeof parsed === "object" && "curves" in parsed) {
+    const legacy = parsed as {curves?: {"18"?: number[]; "31"?: number[]; "10"?: number[]}; presets?: Array<{name:string;mode:string;gains:number[]}>};
+    const entries: EqualizerCustomPreset[] = [];
+    if(legacy.curves?.["18"]) entries.push(createEqualizerCustomPreset("18段曲线转换",resampleBands(legacy.curves["18"],legacy18,equalizerFrequencies)));
+    if(legacy.curves?.["10"]) entries.push(createEqualizerCustomPreset("10段曲线",legacy.curves["10"]));
+    if(legacy.curves?.["31"]) entries.push(createEqualizerCustomPreset("31段曲线",legacy.curves["31"]));
+    for(const item of legacy.presets??[]) if(Array.isArray(item.gains)) entries.push(createEqualizerCustomPreset(item.name,item.mode==="18"?resampleBands(item.gains,legacy18,equalizerFrequencies):item.gains));
+    return {presets:entries,error:entries.length?null:"预设内容为空。"};
   }
   const list = Array.isArray(parsed)
     ? parsed
@@ -178,7 +218,7 @@ export function parseEqualizerPresetImport(raw: unknown): { presets: EqualizerCu
 export function equalizerBandsMatch(a: number[], b: number[]) {
   const left = sanitizeEqualizerBands(a);
   const right = sanitizeEqualizerBands(b);
-  return left.every((gain, index) => Math.abs(gain - right[index]) < 0.05);
+  return left.length === right.length && left.every((gain, index) => Math.abs(gain - right[index]) < 0.05);
 }
 
 /** Smooth cubic curve for the animated response graph.

@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import {
   equalizerBandsMatch,
   equalizerCurvePath,
-  equalizerFrequencies,
+  frequenciesForBands,
+  resampleBands,
   equalizerPresetExportPayload,
   equalizerPresetFileName,
   equalizerPresets,
@@ -17,7 +18,6 @@ import {
 } from "@/lib/equalizer";
 import { cn } from "@/lib/utils";
 
-const frequencyLabels = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
 const graphWidth = 720;
 const graphHeight = 180;
 
@@ -26,6 +26,7 @@ function clampGain(value: number) {
 }
 
 export type EqualizerPanelProps = {
+  onModeChange: (mode: "10" | "31") => void;
   enabled: boolean;
   bands: number[];
   preset: EqualizerPresetId;
@@ -41,6 +42,7 @@ export type EqualizerPanelProps = {
 
 export function EqualizerPanel({
   enabled,
+  onModeChange,
   bands,
   preset,
   error,
@@ -52,6 +54,9 @@ export function EqualizerPanel({
   onDeletePreset,
   onImportPresets,
 }: EqualizerPanelProps) {
+  const frequencies = frequenciesForBands(bands);
+  const labels = frequencies.map(f => f >= 1000 ? f / 1000 + "k" : String(f));
+  const toCurrent = (values: number[]) => resampleBands(values, frequenciesForBands(values), frequencies);
   const [selectedBands, setSelectedBands] = useState<number[]>([]);
   const [activeBand, setActiveBand] = useState<number | null>(null);
   const [savingOpen, setSavingOpen] = useState(false);
@@ -94,8 +99,9 @@ export function EqualizerPanel({
     return () => cancelAnimationFrame(frame);
   }, [bands]);
 
-  const activeBuiltin = equalizerPresets.find((item) => equalizerBandsMatch(item.bands, bands));
-  const activeCustom = customPresets.find((item) => equalizerBandsMatch(item.bands, bands));
+  useEffect(() => { setSelectedBands([]); dragRef.current = null; }, [bands.length]);
+  const activeBuiltin = equalizerPresets.find((item) => equalizerBandsMatch(toCurrent(item.bands), bands));
+  const activeCustom = customPresets.find((item) => equalizerBandsMatch(toCurrent(item.bands), bands));
   const activePresetLabel = activeCustom?.name ?? activeBuiltin?.label ?? "自定义";
 
   function commit(next: number[]) {
@@ -106,7 +112,7 @@ export function EqualizerPanel({
 
   function applyPreset(id: EqualizerPresetId, nextBands: number[]) {
     onPresetChange(id);
-    onBandsChange(nextBands.slice());
+    onBandsChange(toCurrent(nextBands));
     setNotice(null);
   }
 
@@ -189,7 +195,7 @@ export function EqualizerPanel({
   async function importPresets(file: File | undefined) {
     if (!file) return;
     try {
-      const { presets: imported, error: parseError } = parseEqualizerPresetImport(await file.text());
+      const { presets: imported, error: parseError } = parseEqualizerPresetImport(await file.text(), bands.length);
       if (parseError) {
         setNotice({ tone: "error", text: parseError });
         return;
@@ -210,7 +216,7 @@ export function EqualizerPanel({
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Equalizer</p>
           <h3 className="mt-1 flex items-center gap-2 text-base font-semibold">
             声音塑形
-            <span className="rounded-full bg-neutral-950/[0.045] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">10 band</span>
+            <span className="rounded-full bg-neutral-950/[0.045] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-neutral-500">{bands.length} band</span>
           </h3>
           <p className="mt-1 max-w-xl text-xs leading-5 text-neutral-500">
             拖动频段调整增益；按住 Shift（或 Cmd / Ctrl）点选多个频段后，可一起拖动。更改实时生效，且只保存在这台电脑。
@@ -232,6 +238,7 @@ export function EqualizerPanel({
         </div>
       </div>
 
+      <div className="mt-3 flex gap-2" role="group" aria-label="均衡器频段模式">{(["10", "31"] as const).map(mode => <button key={mode} aria-pressed={String(bands.length) === mode} className={cn("rounded-full px-3 py-1 text-xs", String(bands.length) === mode ? "bg-violet-600 text-white" : "bg-neutral-100 text-neutral-500")} onClick={() => onModeChange(mode)}>{mode} 段</button>)}</div>
       <div className="relative mt-4 flex flex-wrap items-center gap-2">
         {equalizerPresets.map((item) => {
           const active = preset === item.id && (!activeBuiltin || activeBuiltin.id === item.id);
@@ -265,7 +272,7 @@ export function EqualizerPanel({
 
       <div className={cn("aria-eq-plot relative mt-4 rounded-[1.15rem] border border-white/70 p-3 shadow-inner transition", !enabled && "opacity-65")}>
         <div className="flex gap-1 px-1">
-          {equalizerFrequencies.map((frequency, index) => {
+          {frequencies.map((frequency, index) => {
             const gain = Math.round(bands[index] ?? 0);
             const isActive = activeBand === index;
             const isSelected = selectedBands.includes(index);
@@ -321,7 +328,7 @@ export function EqualizerPanel({
           </svg>
 
           <div className="absolute inset-0 flex items-stretch justify-between gap-1">
-            {equalizerFrequencies.map((frequency, index) => {
+            {frequencies.map((frequency, index) => {
               const gain = bands[index] ?? 0;
               const ratio = (gain + maxEqualizerGain) / (maxEqualizerGain * 2);
               const isActive = activeBand === index;
@@ -331,7 +338,7 @@ export function EqualizerPanel({
                   <div
                     role="slider"
                     tabIndex={0}
-                    aria-label={`${frequencyLabels[index]} 赫兹`}
+                    aria-label={`${labels[index]} 赫兹`}
                     aria-valuemin={-maxEqualizerGain}
                     aria-valuemax={maxEqualizerGain}
                     aria-valuenow={gain}
@@ -379,10 +386,10 @@ export function EqualizerPanel({
         </div>
 
         <div className="mt-1 flex gap-1 px-1">
-          {equalizerFrequencies.map((frequency, index) => {
+          {frequencies.map((frequency, index) => {
             const isSelected = selectedBands.includes(index);
             return (
-              <span key={`freq-${frequency}`} className={cn("flex-1 text-center text-[10px] font-medium transition-colors", isSelected ? "text-violet-600" : "text-neutral-400")}>{frequencyLabels[index]}</span>
+              <span key={`freq-${frequency}`} className={cn("flex-1 text-center text-[10px] font-medium transition-colors", isSelected ? "text-violet-600" : "text-neutral-400")}>{labels[index]}</span>
             );
           })}
         </div>
@@ -408,6 +415,10 @@ export function EqualizerPanel({
               <Upload />
               导入
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => {
+              const text = "GraphicEQ: " + frequencies.map((f,i)=>f+" "+bands[i]).join("; ");
+              const url=URL.createObjectURL(new Blob([text],{type:"text/plain"}));const anchor=document.createElement("a");anchor.href=url;anchor.download="aria-"+bands.length+"-band.txt";anchor.click();URL.revokeObjectURL(url);
+            }}>GraphicEQ</Button>
             <Button variant="ghost" size="sm" onClick={exportPresets}>
               <Download />
               导出
@@ -415,7 +426,7 @@ export function EqualizerPanel({
             <input
               ref={importInputRef}
               type="file"
-              accept="application/json,.json"
+              accept="application/json,.json,text/plain,.txt"
               className="hidden"
               onChange={(event) => {
                 void importPresets(event.target.files?.[0]);

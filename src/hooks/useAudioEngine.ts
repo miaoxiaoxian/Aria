@@ -5,7 +5,7 @@ import { nativePlaybackStateChanged, syncNativePlaybackClock } from "@/lib/nativ
 import { api } from "@/lib/api";
 import { commitPlaybackTime, getPlaybackTime } from "@/lib/playbackClock";
 import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
-import { equalizerFrequencies } from "@/lib/equalizer";
+import { frequenciesForBands } from "@/lib/equalizer";
 import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type QualityLevel } from "@/lib/playerPresentation";
 import loudnessProcessorUrl from "@/lib/loudnessProcessor.js?url&no-inline";
 
@@ -752,15 +752,18 @@ export function useAudioEngine(options: {
       audioSourceRef.current.connect(analyserRef.current);
     }
 
-    if (!equalizerFiltersRef.current.length) {
+    if (equalizerFiltersRef.current.length !== options.equalizerBands.length) {
+      equalizerFiltersRef.current.forEach(node => node.disconnect());
+      equalizerFiltersRef.current = [];
+      analyserOutputModeRef.current = null;
       // A fixed 10-band peaking chain always sits after the analyser. A
       // disabled EQ simply runs at 0 dB, which avoids clicks and graph
       // rebuilds while the user toggles it.
-      equalizerFiltersRef.current = equalizerFrequencies.map((frequency) => {
+      equalizerFiltersRef.current = frequenciesForBands(options.equalizerBands).map((frequency) => {
         const filter = context.createBiquadFilter();
         filter.type = "peaking";
         filter.frequency.value = frequency;
-        filter.Q.value = 1.1;
+        filter.Q.value = options.equalizerBands.length === 31 ? 4.32 : 1.1;
         filter.gain.value = 0;
         return filter;
       });
@@ -837,6 +840,7 @@ export function useAudioEngine(options: {
     options.normalizationEnabled,
     options.equalizerEnabled,
     normalizerReady,
+    options.equalizerBands.length,
     options.volume,
     selectedSinkId,
   ]);

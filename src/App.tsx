@@ -262,7 +262,7 @@ export default function App() {
   function saveCustomEqualizerPreset(name: string) {
     const trimmed = name.trim().slice(0, 24);
     if (!trimmed) return false;
-    const existing = customEqualizerPresets.find((item) => item.name === trimmed);
+    const existing = customEqualizerPresets.find((item) => item.name === trimmed && item.bands.length === equalizer.bands.length);
     if (!existing && customEqualizerPresets.length >= maxEqualizerCustomPresets) return false;
     const preset = createEqualizerCustomPreset(trimmed, equalizer.bands);
     const next = existing
@@ -2528,6 +2528,13 @@ export default function App() {
                 <EqualizerDialog
                   open={equalizerOpen}
                   onClose={() => setEqualizerOpen(false)}
+                  onModeChange={(mode) => {
+                    let curves: Record<string, number[]> = {};
+                    try { curves = JSON.parse(localStorage.getItem("aria-equalizer-layout-curves-v2") || "{}"); } catch { /* Optional persistence. */ }
+                    curves[String(equalizer.bands.length)] = equalizer.bands.slice();
+                    try { localStorage.setItem("aria-equalizer-layout-curves-v2", JSON.stringify(curves)); } catch { /* Optional persistence. */ }
+                    updateEqualizer({ bands: curves[mode]?.length === Number(mode) ? curves[mode] : Array(Number(mode)).fill(0), preset: "custom" });
+                  }}
                   enabled={equalizer.enabled}
                   bands={equalizer.bands}
                   preset={equalizer.preset}

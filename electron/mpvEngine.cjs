@@ -18,9 +18,10 @@ const NATIVE_AUDIO_EXECUTABLE = IS_WINDOWS ? "mpv.exe" : "mpv";
 const NATIVE_AUDIO_OUTPUT = IS_MAC ? "coreaudio" : IS_WINDOWS ? "wasapi" : "pipewire,pulse,alsa";
 const EQUALIZER_FREQUENCIES = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 
+const EQ31 = [20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000];
 function sanitizeEqualizerBands(value) {
   const source = Array.isArray(value) ? value : [];
-  return EQUALIZER_FREQUENCIES.map((_, index) => {
+  return (source.length === 31 ? EQ31 : EQUALIZER_FREQUENCIES).map((_, index) => {
     const gain = Number(source[index]);
     if (!Number.isFinite(gain)) return 0;
     return Math.max(-12, Math.min(12, Math.round(gain * 10) / 10));
@@ -29,7 +30,7 @@ function sanitizeEqualizerBands(value) {
 
 function buildEqualizerFilter(bands) {
   return bands
-    .map((gain, index) => `equalizer=f=${EQUALIZER_FREQUENCIES[index]}:width_type=o:width=1:g=${gain}`)
+    .map((gain, index) => `equalizer=f=${(bands.length === 31 ? EQ31 : EQUALIZER_FREQUENCIES)[index]}:width_type=q:width=${bands.length === 31 ? 4.32 : 1.1}:g=${gain}`)
     .join(",");
 }
 
