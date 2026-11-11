@@ -80,10 +80,12 @@ import {
   trimTrackCache,
   writeCachedPlayerState,
   type AudioOutputMode,
+  type DsdPcmRate,
   type CoverPalette,
   type PlayerSideView,
   type QualityLevel,
 } from "@/lib/playerPresentation";
+import { isLocalDsd } from "@/lib/dsdOutput";
 import { commitPlaybackTime, getPlaybackTime, resetPlaybackTime } from "@/lib/playbackClock";
 import { materializeQueueIds, mergeQueueTrackSources, orderedQueueIds, playableTracks } from "@/lib/playQueue";
 import { matchesShortcut, readKeyboardShortcuts, writeKeyboardShortcuts, type KeyboardShortcuts } from "@/lib/keyboardShortcuts";
@@ -240,6 +242,8 @@ export default function App() {
   const [gaplessEnabled, setGaplessEnabled] = useState(() => readCachedAudioSettings().gaplessEnabled ?? false);
   const [normalizationEnabled, setNormalizationEnabled] = useState(() => readCachedAudioSettings().normalizationEnabled ?? false);
   const [audioOutputMode, setAudioOutputMode] = useState<AudioOutputMode>(() => readCachedAudioSettings().outputMode ?? "system");
+  const [dsdPcmRate, setDsdPcmRate] = useState<DsdPcmRate>(() => readCachedAudioSettings().dsdPcmRate ?? "auto");
+  const [dsdExclusive, setDsdExclusive] = useState(() => readCachedAudioSettings().dsdExclusive ?? true);
   const [equalizer, setEqualizer] = useState(() => readCachedEqualizerSettings() ?? defaultEqualizerSettings());
   useEffect(() => {
     writeCachedEqualizerSettings(equalizer);
@@ -959,7 +963,7 @@ export default function App() {
   // the current track finishes, so the advance happens inside mpv.
   const getNextPreload = useEffectEvent(() => {
     const resolveUrl = (track: Track): string | null => {
-      if (!track.streamUrl || track.requiresNativePlayback) return null;
+      if (!track.streamUrl || track.requiresNativePlayback || isLocalDsd(track) || isLocalDsd(activeTrackRef.current)) return null;
       const resolvedUrl = api.resolveUrl(track.streamUrl);
       if (track.source !== "netease") return resolvedUrl;
       const url = new URL(resolvedUrl, window.location.href);
@@ -1017,6 +1021,8 @@ export default function App() {
     equalizerEnabled: equalizer.enabled,
     equalizerBands: equalizer.bands,
     audioOutputMode,
+    dsdPcmRate,
+    dsdExclusive,
     pageVisible,
     analyserEnabled: pageVisible && (activeView === "player" || immersiveOpen),
     videoMode,
@@ -2879,6 +2885,10 @@ export default function App() {
                   normalizationError={normalizationError}
                   nativeAudioSupported={nativeAudioSupported}
                   nativeAudioState={nativeAudioState}
+                  dsdPcmRate={dsdPcmRate}
+                  onDsdPcmRateChange={setDsdPcmRate}
+                  dsdExclusive={dsdExclusive}
+                  onDsdExclusiveChange={setDsdExclusive}
                   audioOutputMode={audioOutputMode}
                   onAudioOutputModeChange={setAudioOutputMode}
                   exclusiveMode={exclusiveMode}

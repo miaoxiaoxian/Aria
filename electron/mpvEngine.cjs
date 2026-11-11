@@ -530,6 +530,7 @@ class MpvAudioEngine {
 
   async applyOutputSettings({
     exclusive,
+    samplerate,
     deviceId,
     volume,
     normalizationEnabled = this.state.normalizationEnabled,
@@ -565,6 +566,11 @@ class MpvAudioEngine {
         this.state.url = null;
         throw new Error("WASAPI exclusive mode was rejected by the selected output device.");
       }
+    }
+    if (typeof samplerate === "number") {
+      if (![0, 44100, 88200, 176400].includes(samplerate)) throw new Error("Unsupported DSD PCM output rate.");
+      await this.command("set_property", "audio-samplerate", samplerate);
+      this.state.samplerate = samplerate;
     }
     this.writeLog("native-audio.log", `native output: ${this.state.exclusive ? "exclusive" : "shared"} device=${this.state.deviceId}`);
     if (typeof deviceId === "string") {
@@ -761,6 +767,7 @@ class MpvAudioEngine {
       paused = true,
       volume = 72,
       exclusive = false,
+      samplerate = 0,
       deviceId = "default",
       nativeDevice = null,
       startChapter = null,
@@ -788,7 +795,7 @@ class MpvAudioEngine {
     await this.command("set_property", "pause", true).catch(() => undefined);
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
-    await this.applyOutputSettings({ exclusive, deviceId, volume, normalizationEnabled, equalizerEnabled, equalizerBands });
+    await this.applyOutputSettings({ exclusive, samplerate, deviceId, volume, normalizationEnabled, equalizerEnabled, equalizerBands });
     if (!this.isCurrentLoad(token)) return this.snapshot({ kind: "superseded" });
 
     if (String(url).startsWith("cdda://")) {

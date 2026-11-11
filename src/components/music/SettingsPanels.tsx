@@ -9,6 +9,8 @@ import { Metric } from "@/components/music/shared";
 import { api, type ApiLibraryWatchState, type NeteaseAccountSummary, type NeteaseQrStart, type SourceAccountSummary, type SourceManifestInfo, type UpdateState } from "@/lib/api";
 import { SourceLogo, type SourceLogoOption } from "@/components/music/SourceLogos";
 import type { NativeAudioState } from "@/lib/audioTypes";
+import { AdvancedAudioSettings } from "./AdvancedAudioSettings";
+import type { DsdPcmRate } from "@/lib/playerPresentation";
 import type { AudioOutputMode } from "@/lib/playerPresentation";
 import { ariaThemeOptions, type AriaTheme } from "@/lib/theme";
 import {
@@ -201,6 +203,7 @@ export function SettingsPanel({
   nativeAudioSupported,
   nativeAudioState,
   audioOutputMode,
+  dsdPcmRate, onDsdPcmRateChange, dsdExclusive, onDsdExclusiveChange,
   onAudioOutputModeChange,
   exclusiveMode,
   keyboardShortcuts,
@@ -240,6 +243,10 @@ export function SettingsPanel({
   nativeAudioSupported: boolean;
   nativeAudioState: NativeAudioState | null;
   audioOutputMode: AudioOutputMode;
+  dsdPcmRate: DsdPcmRate;
+  onDsdPcmRateChange: (rate: DsdPcmRate) => void;
+  dsdExclusive: boolean;
+  onDsdExclusiveChange: (enabled: boolean) => void;
   onAudioOutputModeChange: (value: AudioOutputMode) => void;
   exclusiveMode: boolean;
   keyboardShortcuts: KeyboardShortcuts;
@@ -301,199 +308,12 @@ export function SettingsPanel({
         </div>
 
         <div className="no-scrollbar grid min-h-0 flex-1 auto-rows-max grid-cols-1 content-start gap-4 overflow-y-auto p-5 sm:p-7 lg:grid-cols-2">
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Runtime</p>
-                <h3 className="mt-1 text-base font-semibold">后台托管</h3>
-              </div>
-              <button
-                className={cn(
-                  "flex h-8 w-14 items-center rounded-full p-1 transition",
-                  backgroundEnabled ? "bg-neutral-950" : "bg-neutral-200",
-                )}
-                onClick={() => onBackgroundEnabledChange(!backgroundEnabled)}
-                aria-label="切换后台托管"
-              >
-                <span
-                  className={cn(
-                    "size-6 rounded-full bg-white shadow-sm transition",
-                    backgroundEnabled && "translate-x-6",
-                  )}
-                />
-              </button>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-neutral-500">
-              <Metric value={desktopReady ? "Desktop" : "Web"} label="模式" />
-              <Metric value={apiState === "online" ? "Online" : apiState === "offline" ? "Offline" : "..."} label="后端" />
-              <Metric value={backgroundEnabled ? "ON" : "OFF"} label="托管" />
-            </div>
-            <div className="mt-4 flex gap-2">
-              <Button
-                className="flex-1"
-                variant="subtle"
-                size="sm"
-                disabled={!desktopReady}
-                onClick={() => window.ariaDesktop?.minimizeToTray?.()}
-              >
-                <Settings2 />
-                托管到后台
-              </Button>
-              <Button
-                className="flex-1"
-                variant="ghost"
-                size="sm"
-                onClick={refreshApiState}
-              >
-                <RefreshCw />
-                刷新状态
-              </Button>
-            </div>
-          </section>
-
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Appearance</p>
-                <h3 className="mt-1 text-base font-semibold">外观主题</h3>
-              </div>
-              <Badge>{ariaThemeOptions.find((option) => option.value === theme)?.label ?? "跟随系统"}</Badge>
-            </div>
-            <p className="mt-2 text-xs text-neutral-500">深色模式会同步覆盖首页、播放页与设置页的底色、文字与面板阴影。</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-3">
-              {ariaThemeOptions.map((option) => {
-                const active = theme === option.value;
-                const Icon = option.value === "light" ? Sun : option.value === "dark" ? Moon : Monitor;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-pressed={active}
-                    className={cn(
-                      "aria-theme-option flex min-h-24 flex-col justify-between rounded-[1.15rem] border p-3 text-left transition",
-                      active
-                        ? "is-active border-neutral-950 bg-neutral-950 text-white shadow-[0_12px_34px_rgba(23,23,23,0.16)]"
-                        : "border-white/72 bg-white/72 text-neutral-950 hover:bg-white",
-                    )}
-                    onClick={() => onThemeChange(option.value)}
-                  >
-                    <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn(
-                          "flex size-9 items-center justify-center rounded-full",
-                          active ? "bg-white/14 text-white" : "bg-neutral-950/[0.045] text-neutral-500",
-                        )}
-                      >
-                        <Icon className="size-4" />
-                      </span>
-                      {active && <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-neutral-950">使用中</span>}
-                    </span>
-                    <span>
-                      <span className="block text-sm font-semibold">{option.label}</span>
-                      <span className={cn("mt-1 block text-xs", active ? "text-white/70" : "text-neutral-500")}>
-                        {option.description}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          <RemoteAccessSettings />
-
-          <KeyboardShortcutSettings
-            shortcuts={keyboardShortcuts}
-            onChange={onKeyboardShortcutsChange}
-          />
-
-          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Library</p>
-                <h3 className="mt-1 text-base font-semibold">本地音乐目录</h3>
-              </div>
-              <Badge>{libraryMeta.roots.length} 个目录</Badge>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-neutral-500">
-              <Metric value={String(trackCount)} label="曲目" />
-              <Metric value={String(likedCount)} label="喜欢" />
-              <Metric value={`${lyricProgress}%`} label="歌词" />
-            </div>
-            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-neutral-950/8">
-              <div className="h-full rounded-full bg-neutral-950/65" style={{ width: `${lyricProgress}%` }} />
-            </div>
-
-            <div className="mt-5 space-y-2">
-              {libraryMeta.roots.map((root) => (
-                <div key={root} className="flex items-center gap-3 rounded-[1rem] border border-white/70 bg-white/60 px-3 py-2.5 shadow-sm">
-                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-950/[0.045] text-neutral-500">
-                    <FolderSearch className="size-4" />
-                  </span>
-                  <p className="min-w-0 flex-1 truncate text-sm font-medium" title={root}>{root}</p>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`移除目录 ${root}`}
-                    title="从曲库移除（不会删除音频文件）"
-                    onClick={() => onRemoveLibraryRoot(root)}
-                  >
-                    <Trash2 />
-                  </Button>
-                </div>
-              ))}
-              {!libraryMeta.roots.length && (
-                <div className="rounded-[1rem] border border-dashed border-neutral-950/10 bg-white/40 px-4 py-5 text-sm text-neutral-500">
-                  还没有添加音乐目录。添加后 Aria 会扫描歌曲、封面和歌词信息。
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <Button variant="subtle" size="sm" onClick={onAddLibraryFolder} disabled={!window.ariaDesktop?.chooseMusicFolder}>
-                <FolderPlus />
-                添加音乐文件夹
-              </Button>
-              <div className="flex items-center justify-between gap-3 rounded-[1rem] bg-neutral-950/[0.03] px-3 py-2 sm:justify-start">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">自动扫描新歌</p>
-                  <p className="mt-0.5 text-xs text-neutral-500">监视目录变化，新加入的文件会自动进入曲库。</p>
-                </div>
-                <button
-                  type="button"
-                  className={cn("flex h-8 w-14 shrink-0 items-center rounded-full p-1 transition", libraryAutoScanEnabled ? "bg-neutral-950" : "bg-neutral-200")}
-                  onClick={() => onToggleLibraryAutoScan(!libraryAutoScanEnabled)}
-                  aria-label="切换自动扫描新歌"
-                  role="switch"
-                  aria-checked={libraryAutoScanEnabled}
-                >
-                  <span className={cn("size-6 rounded-full bg-white shadow-sm transition", libraryAutoScanEnabled && "translate-x-6")} />
-                </button>
-              </div>
-            </div>
-            <p className={cn("mt-3 min-h-4 text-xs", libraryWatchState?.lastError ? "text-rose-500" : "text-neutral-500")}>
-              {libraryWatchState?.scanningRoots.length
-                ? `正在扫描 ${libraryWatchState.scanningRoots.length} 个目录…`
-                : libraryWatchState?.lastError
-                  ? `自动扫描：${libraryWatchState.lastError}`
-                  : !libraryAutoScanEnabled
-                    ? "自动扫描已关闭，添加目录时仍会手动扫描一次。"
-                    : libraryWatchState?.lastScanAt
-                      ? `上次自动扫描：${new Date(libraryWatchState.lastScanAt).toLocaleString()}`
-                      : "自动扫描已开启，Aria 启动后会补扫离线期间新增的文件。"}
-            </p>
-          </section>
-
-          <NeteaseSourceCard account={neteaseAccount} onAccountChange={onNeteaseAccountChange} />
-
-          <QqSourceCard onAccountChange={onSourceAccountChange} />
-
-          <BilibiliSourceCard onAccountChange={onSourceAccountChange} />
-
+          <div className="space-y-4 lg:col-span-2">
+            <NeteaseSourceCard account={neteaseAccount} onAccountChange={onNeteaseAccountChange} />
+            <details className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm"><summary className="cursor-pointer text-sm font-semibold">QQ 音乐账号 · 点击展开</summary><div className="mt-3"><QqSourceCard onAccountChange={onSourceAccountChange} /></div></details>
+            <details className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm"><summary className="cursor-pointer text-sm font-semibold">B站账号 · 点击展开</summary><div className="mt-3"><BilibiliSourceCard onAccountChange={onSourceAccountChange} /></div></details>
+          </div>
           <SourceEnableCard />
-
-          <UpdateCard />
-
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -768,6 +588,192 @@ export function SettingsPanel({
               </button>
             </div>
           </section>
+          <AdvancedAudioSettings rate={dsdPcmRate} onRateChange={onDsdPcmRateChange} exclusive={dsdExclusive} onExclusiveChange={onDsdExclusiveChange} supported={nativeAudioSupported} state={nativeAudioState} />
+          <UpdateCard />
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Runtime</p>
+                <h3 className="mt-1 text-base font-semibold">后台托管</h3>
+              </div>
+              <button
+                className={cn(
+                  "flex h-8 w-14 items-center rounded-full p-1 transition",
+                  backgroundEnabled ? "bg-neutral-950" : "bg-neutral-200",
+                )}
+                onClick={() => onBackgroundEnabledChange(!backgroundEnabled)}
+                aria-label="切换后台托管"
+              >
+                <span
+                  className={cn(
+                    "size-6 rounded-full bg-white shadow-sm transition",
+                    backgroundEnabled && "translate-x-6",
+                  )}
+                />
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-neutral-500">
+              <Metric value={desktopReady ? "Desktop" : "Web"} label="模式" />
+              <Metric value={apiState === "online" ? "Online" : apiState === "offline" ? "Offline" : "..."} label="后端" />
+              <Metric value={backgroundEnabled ? "ON" : "OFF"} label="托管" />
+            </div>
+            <div className="mt-4 flex gap-2">
+              <Button
+                className="flex-1"
+                variant="subtle"
+                size="sm"
+                disabled={!desktopReady}
+                onClick={() => window.ariaDesktop?.minimizeToTray?.()}
+              >
+                <Settings2 />
+                托管到后台
+              </Button>
+              <Button
+                className="flex-1"
+                variant="ghost"
+                size="sm"
+                onClick={refreshApiState}
+              >
+                <RefreshCw />
+                刷新状态
+              </Button>
+            </div>
+          </section>
+
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Appearance</p>
+                <h3 className="mt-1 text-base font-semibold">外观主题</h3>
+              </div>
+              <Badge>{ariaThemeOptions.find((option) => option.value === theme)?.label ?? "跟随系统"}</Badge>
+            </div>
+            <p className="mt-2 text-xs text-neutral-500">深色模式会同步覆盖首页、播放页与设置页的底色、文字与面板阴影。</p>
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              {ariaThemeOptions.map((option) => {
+                const active = theme === option.value;
+                const Icon = option.value === "light" ? Sun : option.value === "dark" ? Moon : Monitor;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={active}
+                    className={cn(
+                      "aria-theme-option flex min-h-24 flex-col justify-between rounded-[1.15rem] border p-3 text-left transition",
+                      active
+                        ? "is-active border-neutral-950 bg-neutral-950 text-white shadow-[0_12px_34px_rgba(23,23,23,0.16)]"
+                        : "border-white/72 bg-white/72 text-neutral-950 hover:bg-white",
+                    )}
+                    onClick={() => onThemeChange(option.value)}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span
+                        className={cn(
+                          "flex size-9 items-center justify-center rounded-full",
+                          active ? "bg-white/14 text-white" : "bg-neutral-950/[0.045] text-neutral-500",
+                        )}
+                      >
+                        <Icon className="size-4" />
+                      </span>
+                      {active && <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-neutral-950">使用中</span>}
+                    </span>
+                    <span>
+                      <span className="block text-sm font-semibold">{option.label}</span>
+                      <span className={cn("mt-1 block text-xs", active ? "text-white/70" : "text-neutral-500")}>
+                        {option.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <RemoteAccessSettings />
+
+          <KeyboardShortcutSettings
+            shortcuts={keyboardShortcuts}
+            onChange={onKeyboardShortcutsChange}
+          />
+
+          <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-neutral-400">Library</p>
+                <h3 className="mt-1 text-base font-semibold">本地音乐目录</h3>
+              </div>
+              <Badge>{libraryMeta.roots.length} 个目录</Badge>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs text-neutral-500">
+              <Metric value={String(trackCount)} label="曲目" />
+              <Metric value={String(likedCount)} label="喜欢" />
+              <Metric value={`${lyricProgress}%`} label="歌词" />
+            </div>
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-neutral-950/8">
+              <div className="h-full rounded-full bg-neutral-950/65" style={{ width: `${lyricProgress}%` }} />
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {libraryMeta.roots.map((root) => (
+                <div key={root} className="flex items-center gap-3 rounded-[1rem] border border-white/70 bg-white/60 px-3 py-2.5 shadow-sm">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-neutral-950/[0.045] text-neutral-500">
+                    <FolderSearch className="size-4" />
+                  </span>
+                  <p className="min-w-0 flex-1 truncate text-sm font-medium" title={root}>{root}</p>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`移除目录 ${root}`}
+                    title="从曲库移除（不会删除音频文件）"
+                    onClick={() => onRemoveLibraryRoot(root)}
+                  >
+                    <Trash2 />
+                  </Button>
+                </div>
+              ))}
+              {!libraryMeta.roots.length && (
+                <div className="rounded-[1rem] border border-dashed border-neutral-950/10 bg-white/40 px-4 py-5 text-sm text-neutral-500">
+                  还没有添加音乐目录。添加后 Aria 会扫描歌曲、封面和歌词信息。
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <Button variant="subtle" size="sm" onClick={onAddLibraryFolder} disabled={!window.ariaDesktop?.chooseMusicFolder}>
+                <FolderPlus />
+                添加音乐文件夹
+              </Button>
+              <div className="flex items-center justify-between gap-3 rounded-[1rem] bg-neutral-950/[0.03] px-3 py-2 sm:justify-start">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold">自动扫描新歌</p>
+                  <p className="mt-0.5 text-xs text-neutral-500">监视目录变化，新加入的文件会自动进入曲库。</p>
+                </div>
+                <button
+                  type="button"
+                  className={cn("flex h-8 w-14 shrink-0 items-center rounded-full p-1 transition", libraryAutoScanEnabled ? "bg-neutral-950" : "bg-neutral-200")}
+                  onClick={() => onToggleLibraryAutoScan(!libraryAutoScanEnabled)}
+                  aria-label="切换自动扫描新歌"
+                  role="switch"
+                  aria-checked={libraryAutoScanEnabled}
+                >
+                  <span className={cn("size-6 rounded-full bg-white shadow-sm transition", libraryAutoScanEnabled && "translate-x-6")} />
+                </button>
+              </div>
+            </div>
+            <p className={cn("mt-3 min-h-4 text-xs", libraryWatchState?.lastError ? "text-rose-500" : "text-neutral-500")}>
+              {libraryWatchState?.scanningRoots.length
+                ? `正在扫描 ${libraryWatchState.scanningRoots.length} 个目录…`
+                : libraryWatchState?.lastError
+                  ? `自动扫描：${libraryWatchState.lastError}`
+                  : !libraryAutoScanEnabled
+                    ? "自动扫描已关闭，添加目录时仍会手动扫描一次。"
+                    : libraryWatchState?.lastScanAt
+                      ? `上次自动扫描：${new Date(libraryWatchState.lastScanAt).toLocaleString()}`
+                      : "自动扫描已开启，Aria 启动后会补扫离线期间新增的文件。"}
+            </p>
+          </section>
+
+
 
         </div>
         <div className="flex items-center justify-between border-t border-neutral-950/6 px-5 py-3 text-xs text-neutral-400 sm:px-7">

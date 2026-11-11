@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   configureGlobalShortcuts: (payload) => ipcRenderer.invoke("aria:configure-global-shortcuts", payload || {}),
   copyImageToClipboard: (payload) => ipcRenderer.invoke("aria:copy-image", payload || {}),
   log: (payload) => ipcRenderer.invoke("aria:log", payload),
+  asio: {
+    listDrivers: () => ipcRenderer.invoke("aria:asio:drivers"),
+    listChannels: (payload) => ipcRenderer.invoke("aria:asio:channels", payload),
+    openPanel: (payload) => ipcRenderer.invoke("aria:asio:panel", payload),
+  },
   nativeAudio: {
     // The renderer refines this with isSupported(), which checks whether the
     // platform mpv binary is actually present (vendor/mpv/<Aria.exe|mpv>).

@@ -22,6 +22,7 @@ import { AddToPlaylistButton } from "./PlaylistActions";
 import { WordLyricText } from "./WordLyricText";
 import { getLyricStartTime } from "@/lib/lyricTiming";
 import { AnalysisPanel, AnalysisMenu, ImmersiveAnalysisGrid, useAnalysisMode } from "./AnalysisPanel";
+import { isLocalDsd } from "@/lib/dsdOutput";
 import type { StereoAnalysers } from "@/lib/audioAnalysis";
 import { SpectrumCanvas } from "@/components/music/SpectrumCanvas";
 import { CopyableTrackText, CoverArt } from "@/components/music/shared";
@@ -729,7 +730,7 @@ export function PlayerSurface({
             <div className="px-1">
               {analysisMode !== "original" ? <>
                 <div className="mb-2"><AnalysisMenu mode={analysisMode} onChange={setAnalysisMode} includeOriginal={false} className="h-7 rounded-full border border-white/60 bg-white/60 px-3 text-xs text-neutral-600" /></div>
-                <AnalysisPanel mode={analysisMode} onChange={setAnalysisMode} analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} trackId={activeTrack.id} hideTabs />
+                <AnalysisPanel mode={analysisMode} onChange={setAnalysisMode} analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} note={isLocalDsd(activeTrack) ? "DSD 正由 mpv 解码播放，暂无浏览器分析信号" : undefined} trackId={activeTrack.id} hideTabs />
               </> : <SpectrumCanvas
                 analyserRef={analyserRef}
                 playing={visualizerPlaying}
@@ -1101,7 +1102,7 @@ export function ImmersivePlayerView({
                   <p className="mt-1 truncate text-sm text-white/35">{activeTrack.album}</p>
                 </div>
 
-                {view === "analysis" ? <ImmersiveAnalysisGrid analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} trackId={activeTrack.id} /> : <div className="no-scrollbar mt-2 min-h-0 overflow-y-auto pr-2 lg:mt-6">
+                {view === "analysis" ? <ImmersiveAnalysisGrid analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} note={isLocalDsd(activeTrack) ? "DSD 正由 mpv 解码播放，暂无浏览器分析信号" : undefined} trackId={activeTrack.id} /> : <div className="no-scrollbar mt-2 min-h-0 overflow-y-auto pr-2 lg:mt-6">
                   <div className="space-y-1.5">
                     {visibleLyrics.map((line, index) => {
                       const originalIndex = Math.max(0, activeLyricIndex - 2) + index;

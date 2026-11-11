@@ -7,6 +7,8 @@ import { commitPlaybackTime, getPlaybackTime } from "@/lib/playbackClock";
 import { configureSpectrumAnalyser } from "@/lib/spectrumEngine";
 import { frequenciesForBands } from "@/lib/equalizer";
 import { readCachedAudioSettings, writeCachedAudioSettings, type AudioOutputMode, type QualityLevel } from "@/lib/playerPresentation";
+import { dsdOutputSettings } from "@/lib/dsdOutput";
+import type { DsdPcmRate } from "@/lib/playerPresentation";
 import loudnessProcessorUrl from "@/lib/loudnessProcessor.js?url&no-inline";
 
 // Owns the media pipeline: the HTML audio element, the mpv native bridge
@@ -35,6 +37,8 @@ export function useAudioEngine(options: {
   equalizerEnabled: boolean;
   equalizerBands: number[];
   audioOutputMode: AudioOutputMode;
+  dsdPcmRate: DsdPcmRate;
+  dsdExclusive: boolean;
   pageVisible: boolean;
   analyserEnabled: boolean;
   videoMode: boolean;
@@ -55,6 +59,7 @@ export function useAudioEngine(options: {
   getNextPreload: () => { trackId: string; url: string } | null;
 }) {
   const activeTrack = options.activeTrack;
+  const dsdOutput = useMemo(() => dsdOutputSettings(activeTrack, options.dsdPcmRate, options.dsdExclusive, options.exclusiveMode), [activeTrack.source, activeTrack.format, activeTrack.filePath, options.dsdPcmRate, options.dsdExclusive, options.exclusiveMode]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<Array<{ id: string; label: string }>>([]);
   const [nativeAudioSupported, setNativeAudioSupported] = useState(() => Boolean(window.ariaDesktop?.nativeAudio?.supported));
   const [nativeAudioState, setNativeAudioState] = useState<NativeAudioState | null>(null);
@@ -77,7 +82,7 @@ export function useAudioEngine(options: {
   // mixer. Audio CD playback always requires the native engine.
   const nativePlaybackRequested = Boolean(
     nativeAudioSupported &&
-      (options.audioOutputMode !== "system" || activeTrack.requiresNativePlayback) &&
+      (options.audioOutputMode !== "system" || activeTrack.requiresNativePlayback || dsdOutput.isDsd) &&
       !options.videoMode,
   );
   // Do not silently send a failed WASAPI request back through Chromium. That
@@ -329,8 +334,11 @@ export function useAudioEngine(options: {
       normalizationEnabled: options.normalizationEnabled,
       exclusiveMode: options.exclusiveMode,
       outputMode: options.audioOutputMode,
+      dsdPlayback: "d2p",
+      dsdPcmRate: options.dsdPcmRate,
+      dsdExclusive: options.dsdExclusive,
     });
-  }, [options.audioOutputMode, options.exclusiveMode, options.gaplessEnabled, options.hifiEnabled, options.masterQualityEnabled, options.normalizationEnabled, selectedSinkId]);
+  }, [options.dsdPcmRate, options.dsdExclusive, options.audioOutputMode, options.exclusiveMode, options.gaplessEnabled, options.hifiEnabled, options.masterQualityEnabled, options.normalizationEnabled, selectedSinkId]);
 
   useEffect(() => {
     setNativePlaybackFailed(false);
@@ -458,7 +466,7 @@ export function useAudioEngine(options: {
     getNextPreload: () => null as { trackId: string; url: string } | null,
   });
   preloadInputsRef.current = {
-    enabled: nativePlaybackEnabled && options.gaplessEnabled,
+    enabled: nativePlaybackEnabled && options.gaplessEnabled && !dsdOutput.isDsd,
     playing: options.playing,
     durationSeconds: options.durationSeconds,
     activeTrackId: options.activeTrack.id,
@@ -505,7 +513,7 @@ export function useAudioEngine(options: {
     if (!nativePlaybackEnabled || !nativeAudio?.supported) return;
     options.pendingSeekRef.current = getPlaybackTime();
     nativeLoadedUrlRef.current = null;
-  }, [options.exclusiveMode, nativePlaybackEnabled, selectedSinkId]);
+  }, [dsdOutput, nativePlaybackEnabled, selectedSinkId]);
 
   useEffect(() => {
     const nativeAudio = window.ariaDesktop?.nativeAudio;
@@ -532,6 +540,8 @@ export function useAudioEngine(options: {
       options.activeTrack.nativeStart ?? "",
       options.activeTrack.nativeEnd ?? "",
       options.activeTrack.cdReadQuality ?? "high",
+      String(dsdOutput.samplerate),
+      String(dsdOutput.exclusive),
     ].join("\u0000");
     // A gapless advance is already loaded by mpv before React adopts the new
     // track id. Replacing that URL here would restart the song at zero and
@@ -540,7 +550,8 @@ export function useAudioEngine(options: {
       nativeAudioState?.active &&
         nativeAudioState.trackId === options.activeTrack.id &&
         nativeAudioState.url === nextUrl &&
-        nativeAudioState.exclusive === options.exclusiveMode &&
+        nativeAudioState.exclusive === dsdOutput.exclusive &&
+        (nativeAudioState.samplerate ?? 0) === dsdOutput.samplerate &&
         nativeAudioState.deviceId === (selectedSinkId === "default" ? "auto" : selectedSinkId),
     );
     if (nativeStateOwnsTrack) {
@@ -560,7 +571,8 @@ export function useAudioEngine(options: {
         position: options.pendingSeekRef.current || 0,
         paused: !options.playing,
         volume: options.volume,
-        exclusive: options.exclusiveMode,
+        exclusive: dsdOutput.exclusive,
+        samplerate: dsdOutput.samplerate,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,
@@ -594,6 +606,7 @@ export function useAudioEngine(options: {
     nativeAudioState?.active,
     nativeAudioState?.trackId,
     options.exclusiveMode,
+    dsdOutput,
     options.volume,
     options.playing,
     selectedSinkId,
@@ -673,6 +686,8 @@ export function useAudioEngine(options: {
       options.activeTrack.nativeStart ?? "",
       options.activeTrack.nativeEnd ?? "",
       options.activeTrack.cdReadQuality ?? "high",
+      String(dsdOutput.samplerate),
+      String(dsdOutput.exclusive),
     ].join("\u0000");
     nativeLoadSequenceRef.current += 1;
     nativeLoadedUrlRef.current = nextLoadKey;
@@ -687,7 +702,8 @@ export function useAudioEngine(options: {
         position: 0,
         paused: false,
         volume: options.volume,
-        exclusive: options.audioOutputMode === "exclusive",
+        exclusive: dsdOutput.exclusive,
+        samplerate: dsdOutput.samplerate,
         deviceId: selectedSinkId,
         nativeDevice: options.activeTrack.nativeDevice ?? null,
         startChapter: options.activeTrack.nativeStart ?? null,

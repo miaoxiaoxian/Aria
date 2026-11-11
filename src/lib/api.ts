@@ -6,6 +6,35 @@ declare global {
     ariaDesktop?: {
       /** `win32` | `darwin` | `linux` — lets the shell render platform-correct chrome. */
       platform?: string;
+      asio?: {
+        listDrivers?: () => Promise<
+          Array<{ name: string; clsid: string | null; description: string; bits: number }>
+        >;
+        listChannels?: (payload: { clsid: string }) => Promise<{
+          ok: boolean;
+          error?: string;
+          driver?: string;
+          inputChannels?: number;
+          outputChannels?: number;
+          bufferMin?: number;
+          bufferMax?: number;
+          bufferPreferred?: number;
+          bufferGranularity?: number;
+          latencyIn?: number;
+          latencyOut?: number;
+          sampleRate?: number;
+          sampleRates?: number[];
+          channels?: Array<{
+            index: number;
+            name: string;
+            sampleType: number;
+            sampleTypeName: string;
+            channelGroup: number;
+            isDsd: boolean;
+          }>;
+        }>;
+        openPanel?: (payload: { clsid: string }) => Promise<{ ok: boolean; error?: string }>;
+      };
       nativeAudio?: {
         supported?: boolean;
         isSupported?: () => Promise<boolean>;
@@ -33,6 +62,7 @@ declare global {
           paused?: boolean;
           volume?: number;
           exclusive?: boolean;
+          samplerate?: number;
           deviceId?: string;
           nativeDevice?: string | null;
           startChapter?: string | null;
@@ -48,6 +78,7 @@ declare global {
         setVolume?: (volume: number) => Promise<unknown>;
         configure?: (payload: {
           exclusive?: boolean;
+          samplerate?: number;
           deviceId?: string;
           volume?: number;
           normalizationEnabled?: boolean;

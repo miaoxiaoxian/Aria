@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, clipboard, globalShortcut, dialog, session } = require("electron");
-const { spawn, execFileSync } = require("node:child_process");
+const { spawn, execFile, execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -1003,6 +1003,133 @@ ipcMain.handle("aria:log", (_event, payload) => {
 
 ipcMain.handle("aria:native-audio:supported", () => {
   return getNativeAudioEngine().isSupported();
+});
+
+// ASIO drivers register themselves under HKLM\SOFTWARE\ASIO with a CLSID;
+// 32-bit-only drivers land in the WOW6432Node mirror. Both views are listed so
+// the channel-mapping card targets the same driver foobar2000 uses.
+function listAsioDrivers() {
+  // reg.exe prints the full hive name (HKEY_LOCAL_MACHINE\...), so the query
+  // path and the line prefix have to match that form.
+  const roots = [
+    { hive: "HKEY_LOCAL_MACHINE\\SOFTWARE\\ASIO", bits: 64 },
+    { hive: "HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\ASIO", bits: 32 },
+  ];
+  const drivers = [];
+  for (const { hive, bits } of roots) {
+    let names = [];
+    try {
+      names = execFileSync("reg", ["query", hive], { encoding: "utf8", windowsHide: true })
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith(`${hive}\\`))
+        .map((line) => line.slice(hive.length + 1))
+        .filter((name) => name && !name.includes("\\"));
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      let clsid = null;
+      let description = "";
+      try {
+        const output = execFileSync("reg", ["query", `${hive}\\${name}`, "/v", "CLSID"], {
+          encoding: "utf8",
+          windowsHide: true,
+        });
+        clsid = (output.match(/CLSID\s+REG_SZ\s+(\{[0-9A-Fa-f-]+\})/) ?? [])[1] ?? null;
+      } catch {
+        clsid = null;
+      }
+      try {
+        const output = execFileSync("reg", ["query", `${hive}\\${name}`, "/v", "Description"], {
+          encoding: "utf8",
+          windowsHide: true,
+        });
+        description = (output.match(/Description\s+REG_SZ\s+(.+)/) ?? [])[1]?.trim() ?? "";
+      } catch {
+        description = "";
+      }
+      if (!drivers.some((driver) => driver.clsid && driver.clsid === clsid)) {
+        drivers.push({ name, clsid, description, bits });
+      }
+    }
+  }
+  return drivers;
+}
+
+ipcMain.handle("aria:asio:drivers", () => {
+  try {
+    return listAsioDrivers();
+  } catch (error) {
+    writeLog("desktop.log", `ASIO driver enumeration failed: ${error?.message ?? error}`);
+    return [];
+  }
+});
+
+// ASIO itself is a raw C++ vtable interface; every attempt to drive it through
+// hand written FFI crashed on the TempoTec driver, while NAudio (MIT, pure
+// .NET) opens it correctly. `vendor/asio/aria-asio.exe` therefore owns all ASIO
+// calls and answers with one line of JSON.
+function resolveAsioHelperPath() {
+  const directory = app.isPackaged
+    ? path.join(process.resourcesPath, "app.asar.unpacked", "vendor", "asio")
+    : path.join(__dirname, "..", "vendor", "asio");
+  return path.join(directory, "aria-asio.exe");
+}
+
+function runAsioHelper(args, timeout = 20000) {
+  return new Promise((resolve) => {
+    const helper = resolveAsioHelperPath();
+    if (!fs.existsSync(helper)) {
+      resolve({ ok: false, error: "ASIO helper is missing from the installation." });
+      return;
+    }
+    execFile(
+      helper,
+      args,
+      { timeout, windowsHide: true, maxBuffer: 1 << 20 },
+      (error, stdout) => {
+        const text = String(stdout ?? "").trim();
+        const line = text.split(/\r?\n/).filter(Boolean).pop() ?? "";
+        if (line.startsWith("{")) {
+          try {
+            resolve(JSON.parse(line));
+            return;
+          } catch {
+            // fall through to the error below
+          }
+        }
+        resolve({ ok: false, error: error?.message ?? "ASIO helper returned no result." });
+      },
+    );
+  });
+}
+
+ipcMain.handle("aria:asio:channels", async (_event, payload) => {
+  const clsid = typeof payload?.clsid === "string" ? payload.clsid : "";
+  if (!clsid) return { ok: false, error: "Missing driver id." };
+  const result = await runAsioHelper(["channels", clsid]);
+  writeLog("desktop.log", `ASIO channels ${clsid}: ${JSON.stringify(result).slice(0, 400)}`);
+  return result;
+});
+
+// Opens the driver's own control panel (it holds the DSD mode switch on most
+// TempoTec/Thesycon drivers). Detached: the window stays until the user closes
+// it, so no IPC result is awaited.
+ipcMain.handle("aria:asio:panel", (_event, payload) => {
+  const clsid = typeof payload?.clsid === "string" ? payload.clsid : "";
+  if (!clsid) return { ok: false, error: "Missing driver id." };
+  try {
+    const child = spawn(resolveAsioHelperPath(), ["panel", clsid], {
+      windowsHide: false,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) };
+  }
 });
 
 ipcMain.handle("aria:native-audio:devices", async () => {

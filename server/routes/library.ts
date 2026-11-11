@@ -223,7 +223,7 @@ export function createLibraryRouter() {
     try {
       const track = await findTrack(req.params.trackId);
       if (!track) throw new HttpError(404, "Track not found", "TRACK_NOT_FOUND");
-      if (track.requiresNativePlayback || track.mediaKind === "audio-cd") {
+      if (track.mediaKind === "audio-cd" || (track.requiresNativePlayback && !/^(DSD|DSF|DFF)$/i.test(track.format) && !/\.(dsf|dff)$/i.test(track.path))) {
         throw new HttpError(409, "Track requires native playback", "NATIVE_PLAYBACK_REQUIRED");
       }
 

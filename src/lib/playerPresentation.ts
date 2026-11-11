@@ -7,6 +7,56 @@ export type CoverPalette = { primary: string; secondary: string };
 export type PlayerSideView = "lyrics" | "queue";
 export type AudioOutputMode = "system" | "shared" | "exclusive";
 
+/** How DSD sources are delivered: decoded PCM (D2P) or bit-perfect DoP. */
+export type DsdPlaybackMode = "d2p" | "dop";
+/** Output rate used when DSD is decoded to PCM; "auto" follows the source. */
+export type DsdPcmRate = "auto" | "44100" | "88200" | "176400";
+/** How the ASIO output should deliver DSD to the driver. */
+export type AsioDsdMode = "native" | "dop" | "pcm";
+
+/** Channel mapping for the ASIO output: which device channel carries L and R. */
+export type AsioChannelMap = { left: number; right: number };
+
+/** What the ASIO helper reports for the selected driver's outputs. */
+export type AsioDriverChannels = {
+  ok: boolean;
+  error?: string;
+  driver?: string;
+  inputChannels?: number;
+  outputChannels?: number;
+  bufferMin?: number;
+  bufferMax?: number;
+  bufferPreferred?: number;
+  bufferGranularity?: number;
+  latencyIn?: number;
+  latencyOut?: number;
+  sampleRate?: number;
+  sampleRates?: number[];
+  channels?: Array<{
+    index: number;
+    name: string;
+    sampleType: number;
+    sampleTypeName: string;
+    channelGroup: number;
+    isDsd: boolean;
+  }>;
+};
+
+export const asioDsdModeLabels: Record<AsioDsdMode, string> = {
+  native: "原生 DSD",
+  dop: "DoP 封装",
+  pcm: "转 PCM",
+};
+
+export const asioBufferSizes = [128, 256, 512, 1024, 2048] as const;
+
+export const dsdPcmRateLabels: Record<DsdPcmRate, string> = {
+  auto: "自动（跟随源）",
+  "176400": "176.4 kHz",
+  "88200": "88.2 kHz",
+  "44100": "44.1 kHz",
+};
+
 export type CachedPlayerState = {
   activeTrackId?: string;
   activeTrackSnapshot?: Track;
@@ -192,6 +242,8 @@ export function createCachedQueueSnapshots(
     discNumber: track.discNumber ?? null,
     bitrate: track.bitrate ?? null,
     sampleRate: track.sampleRate ?? null,
+    format: track.format ?? null,
+    filePath: track.filePath ?? null,
     bpm: null,
     libraryRoot: track.libraryRoot,
     mediaKind: track.mediaKind,
@@ -245,6 +297,8 @@ function normalizeTrackSnapshot(value: unknown): Track | undefined {
     discNumber: typeof track.discNumber === "number" ? track.discNumber : null,
     bitrate: typeof track.bitrate === "number" ? track.bitrate : null,
     sampleRate: typeof track.sampleRate === "number" ? track.sampleRate : null,
+    format: typeof track.format === "string" ? track.format : null,
+    filePath: typeof track.filePath === "string" ? track.filePath : null,
     bpm: null,
     libraryRoot: typeof track.libraryRoot === "string" ? track.libraryRoot : undefined,
     mediaKind: track.mediaKind === "audio-cd" ? "audio-cd" : track.mediaKind === "file" ? "file" : undefined,
@@ -384,6 +438,13 @@ export function readCachedAudioSettings() {
       normalizationEnabled?: boolean;
       exclusiveMode?: boolean;
       outputMode?: AudioOutputMode;
+      dsdPlayback?: DsdPlaybackMode;
+      dsdPcmRate?: DsdPcmRate;
+      dsdExclusive?: boolean;
+      asioDriver?: string;
+      asioDsdMode?: AsioDsdMode;
+      asioBuffer?: number;
+      asioChannels?: { left?: number; right?: number };
     };
     const outputMode =
       parsed.outputMode === "shared" || parsed.outputMode === "exclusive" || parsed.outputMode === "system"
@@ -391,6 +452,10 @@ export function readCachedAudioSettings() {
         : parsed.exclusiveMode
           ? "exclusive"
           : "system";
+    const dsdPcmRate: DsdPcmRate =
+      parsed.dsdPcmRate === "44100" || parsed.dsdPcmRate === "88200" || parsed.dsdPcmRate === "176400"
+        ? parsed.dsdPcmRate
+        : "auto";
     return {
       sinkId: typeof parsed.sinkId === "string" ? parsed.sinkId : "default",
       hifiEnabled: typeof parsed.hifiEnabled === "boolean" ? parsed.hifiEnabled : true,
@@ -399,6 +464,20 @@ export function readCachedAudioSettings() {
       normalizationEnabled: parsed.normalizationEnabled === true,
       exclusiveMode: typeof parsed.exclusiveMode === "boolean" ? parsed.exclusiveMode : false,
       outputMode,
+      dsdPlayback: "d2p" as DsdPlaybackMode,
+      dsdPcmRate,
+      dsdExclusive: typeof parsed.dsdExclusive === "boolean" ? parsed.dsdExclusive : true,
+      asioDriver: typeof parsed.asioDriver === "string" ? parsed.asioDriver : "",
+      asioDsdMode:
+        parsed.asioDsdMode === "native" || parsed.asioDsdMode === "dop" || parsed.asioDsdMode === "pcm" ? parsed.asioDsdMode : "native",
+      asioBuffer:
+        typeof parsed.asioBuffer === "number" && (asioBufferSizes as readonly number[]).includes(parsed.asioBuffer)
+          ? parsed.asioBuffer
+          : 512,
+      asioChannels: {
+        left: typeof parsed.asioChannels?.left === "number" ? parsed.asioChannels.left : 0,
+        right: typeof parsed.asioChannels?.right === "number" ? parsed.asioChannels.right : 1,
+      },
     };
   } catch {
     return {};
@@ -413,9 +492,16 @@ export function writeCachedAudioSettings(settings: {
   normalizationEnabled?: boolean;
   exclusiveMode: boolean;
   outputMode: AudioOutputMode;
+  dsdPlayback?: DsdPlaybackMode;
+  dsdPcmRate?: DsdPcmRate;
+  dsdExclusive?: boolean;
+  asioDriver?: string;
+  asioDsdMode?: AsioDsdMode;
+  asioBuffer?: number;
+  asioChannels?: AsioChannelMap;
 }) {
   try {
-    window.localStorage.setItem(audioSettingsKey, JSON.stringify(settings));
+    window.localStorage.setItem(audioSettingsKey, JSON.stringify({ ...readCachedAudioSettings(), ...settings, dsdPlayback: "d2p" }));
   } catch {
     // Audio settings are best-effort.
   }
@@ -542,7 +628,28 @@ export function formatSampleRate(value?: number | null, compact = false) {
   return compact ? `${rendered}kHz` : `${rendered} kHz`;
 }
 
+export function formatDsdDetail(
+  track: { sampleRate?: number | null; format?: string | null; bitrate?: number | null },
+  compact = true,
+) {
+  const isDsdFormat = track.format === "DSD" || track.format === "DSF" || track.format === "DFF";
+  if (track.sampleRate == null && !isDsdFormat) return null;
+  const labels = new Map<number, string>([
+    [2_822_400, "DSD64"],
+    [5_644_800, "DSD128"],
+    [11_289_600, "DSD256"],
+    [22_579_200, "DSD512"],
+  ]);
+  const tier = track.sampleRate != null ? labels.get(track.sampleRate) : undefined;
+  if (!tier && !isDsdFormat) return null;
+  const bitrate = formatBitrate(track.bitrate, compact);
+  const rate = track.sampleRate ? `${(track.sampleRate / 1_000_000).toFixed(1)}MHz` : null;
+  return [tier ?? "DSD", bitrate, rate].filter(Boolean).join(" · ");
+}
+
 export function formatAudioDetail(track: Track, level?: QualityLevel, compact = true) {
+  const dsd = formatDsdDetail(track, compact);
+  if (dsd) return dsd;
   const resolvedLevel = track.currentLevel ?? level ?? null;
   const qualityLabel = resolvedLevel ? qualityLevelLabels[resolvedLevel] : track.quality;
   const bitrate = track.bitrate ? formatBitrate(track.bitrate, compact) : null;
