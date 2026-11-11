@@ -584,3 +584,21 @@ textarea::selection,
 .immersive-analysis-layout .immersive-analysis-content p { font-size: 0.85rem; margin-top: 0.25rem; }
 @media (max-height: 750px) { .immersive-analysis-grid { height: 48vh; min-height: 200px; } }
 @media (max-width: 900px) { .immersive-analysis-layout .immersive-analysis-content { display: flex; } .immersive-analysis-grid { height: 48vh; } }
+
+/* Keep the audio player balanced across 1080p and 1440p windows. */
+.player-detail-panel { justify-content: center; gap: clamp(1rem, 2.5vh, 2.5rem); }
+.player-detail-panel > div { width: 100%; max-width: 56rem; margin-inline: auto; }
+.player-detail-panel > div + div { margin-top: 0; }
+.player-cover-frame { position: absolute; inset: 0; display: grid; place-items: center; padding: clamp(1.5rem, 4vw, 4rem); }
+.player-cover-frame > div { width: min(100%, 54vh, 560px); aspect-ratio: 1; height: auto; border-radius: 1.5rem; box-shadow: 0 24px 56px #0003; }
+.player-detail-panel .player-track-title { font-size: clamp(1.5rem, 4cqi, 2.5rem); }
+.player-detail-panel .player-analysis-title + p { margin-top: .5rem; font-size: 1rem; }
+.player-controls, .player-volume { align-items: center; }
+.perf-lite * { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+.perf-lite .blur-3xl, .perf-lite .blur-2xl { filter: none !important; }
+.perf-lite .aria-fruit-wash { animation: none !important; }
+.recent-history-dialog { position: fixed; inset: 0; margin: auto; width: min(900px, 90vw); max-height: 80vh; padding: 1.5rem; border: 1px solid var(--line); border-radius: 1.5rem; background: var(--surface, white); color: var(--text-primary, #171717); box-shadow: 0 24px 80px #0003; }
+.recent-history-dialog::backdrop { background: #10102066; backdrop-filter: blur(8px); }
+.recent-history-dialog .home-recent-list { max-height: 60vh; overflow-y: auto; }
+@media (max-width: 1023px) { .player-cover-frame > div { width: min(100%, 320px); } .player-detail-panel { gap: 1rem; } }
+@media (max-height: 800px) and (min-width: 1024px) { .player-detail-panel { padding: 1.25rem; gap: .75rem; } .player-detail-panel .player-quality { margin-top: .5rem; padding: .5rem; } }

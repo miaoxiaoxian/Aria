@@ -52,6 +52,11 @@ contextBridge.exposeInMainWorld("ariaDesktop", {
   configureGlobalShortcuts: (payload) => ipcRenderer.invoke("aria:configure-global-shortcuts", payload || {}),
   copyImageToClipboard: (payload) => ipcRenderer.invoke("aria:copy-image", payload || {}),
   log: (payload) => ipcRenderer.invoke("aria:log", payload),
+  diagnostics: {
+    getStats: () => ipcRenderer.invoke("aria:diagnostics:stats"),
+    exportLogs: payload => ipcRenderer.invoke("aria:diagnostics:export-logs", payload),
+    setGpuOptimize: enabled => ipcRenderer.invoke("aria:set-gpu-optimize", Boolean(enabled)),
+  },
   asio: {
     listDrivers: () => ipcRenderer.invoke("aria:asio:drivers"),
     listChannels: (payload) => ipcRenderer.invoke("aria:asio:channels", payload),

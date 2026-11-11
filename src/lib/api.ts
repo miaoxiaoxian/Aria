@@ -6,6 +6,11 @@ declare global {
     ariaDesktop?: {
       /** `win32` | `darwin` | `linux` — lets the shell render platform-correct chrome. */
       platform?: string;
+      diagnostics?: {
+        getStats: () => Promise<import("./diagnosticsTypes").DiagnosticsSnapshot>;
+        exportLogs: (payload: unknown) => Promise<{ok: boolean; path?: string; error?: string}>;
+        setGpuOptimize: (enabled: boolean) => Promise<boolean>;
+      };
       asio?: {
         listDrivers?: () => Promise<
           Array<{ name: string; clsid: string | null; description: string; bits: number }>

@@ -575,7 +575,7 @@ export function PlayerSurface({
             background: `linear-gradient(145deg, ${palette.primary}30, ${palette.secondary}18, var(--cover-lift))`,
           }}
         >
-          <div className="absolute inset-0" data-taskbar-anchor="player-cover">
+          <div className={cn("absolute inset-0", !videoMode && "player-cover-frame")} data-taskbar-anchor="player-cover">
             {activeTrack.id === "idle" ? (
               <div
                 className="player-idle-cover flex size-full items-center justify-center p-8 text-center"

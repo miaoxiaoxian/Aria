@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, clipboard, globalShortcut, dialog, session } = require("electron");
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, powerMonitor, clipboard, globalShortcut, dialog, session, shell } = require("electron");
 const { spawn, execFile, execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
@@ -1230,7 +1230,10 @@ ipcMain.handle("aria:native-audio:stop", async () => {
 
 app.on("second-instance", showWindow);
 
+const diagnostics = require("./diagnostics.cjs").setupDiagnostics({ app, ipcMain, shell, logger, getBackendPid: () => backendProcess?.pid ?? null });
+
 app.whenReady().then(async () => {
+  await diagnostics.configureGpu();
   attachPowerRecoveryHandlers();
   // Registry/shell maintenance is not part of the first paint path.
   setImmediate(ensureWindowsTaskbarPreviewPolicy);

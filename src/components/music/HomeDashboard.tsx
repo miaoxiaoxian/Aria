@@ -1,5 +1,5 @@
-import { useMemo, useRef } from "react";
-import { ArrowRight, CalendarDays, Clock3, Disc3, Headphones, Music2, Pause, Play } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, CalendarDays, Clock3, Disc3, Headphones, Music2, Pause, Play, X } from "lucide-react";
 import { CopyableTrackText, CoverArt } from "@/components/music/shared";
 import type { PlayHistoryEntry } from "@/lib/playHistory";
 import { formatBitrate, parseDuration, qualityOptions } from "@/lib/playerPresentation";
@@ -225,13 +225,20 @@ export function HomeSurface({
   onOpenPlayer: () => void;
   onNavigate: (id: ViewId) => void;
 }) {
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const historyDialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = historyDialogRef.current;
+    if (historyExpanded && !dialog?.open) dialog?.showModal();
+    else if (!historyExpanded && dialog?.open) dialog.close();
+  }, [historyExpanded]);
   const recentTracks = useMemo(() => {
     const seen = new Set<string>();
     return [...playHistory].sort((a, b) => b.playedAt - a.playedAt).filter(({ track }) => {
       if (seen.has(track.id)) return false;
       seen.add(track.id);
       return true;
-    }).slice(0, 6);
+    });
   }, [playHistory]);
   const snapshot = useMemo(() => buildListeningSnapshot(playHistory), [playHistory]);
   const hour = new Date().getHours();
@@ -266,13 +273,18 @@ export function HomeSurface({
               </div>
             </section>
             <section className="home-section home-recent" aria-labelledby="home-recent-title">
-              <div className="home-section-heading"><div className="home-section-title-block"><h2 id="home-recent-title">最近播放<span className="home-heading-english">Listening journal</span></h2></div><button className="home-more" onClick={() => onNavigate("history")}>全部记录 <ArrowRight aria-hidden="true" /></button></div>
-              {recentTracks.length ? <div className="home-recent-list">{recentTracks.map(({ track, playedAt }, index) => <button key={track.id} className="home-recent-track" onClick={() => onPickTrack(track.id)} aria-label={`播放 ${track.title}`}><span className="home-recent-index">{String(index + 1).padStart(2, "0")}</span><span className="home-recent-art"><CoverArt track={track} className="size-full rounded-[inherit]" /></span><span className="home-recent-meta"><strong className="home-recent-title"><CopyableTrackText track={track} field="title">{track.title}</CopyableTrackText></strong></span><span className="home-recent-artist"><CopyableTrackText track={track} field="artist">{track.artist}</CopyableTrackText></span><time className="home-recent-date" dateTime={new Date(playedAt).toISOString()}>{playedAtLabel(playedAt)}</time><span className="home-card-play"><Play className="fill-current" aria-hidden="true" /></span></button>)}</div> : <div className="home-recent-empty"><span className="home-empty-disc"><Disc3 aria-hidden="true" /></span><span><strong>下一首歌，就是故事的开始</strong><small>开始听一首歌，这里会记住你喜欢的声音。</small></span><button onClick={() => onNavigate("local")}>开始聆听 <ArrowRight aria-hidden="true" /></button></div>}
+              <div className="home-section-heading"><div className="home-section-title-block"><h2 id="home-recent-title">最近播放<span className="home-heading-english">Listening journal</span></h2></div><button className="home-more" onClick={() => setHistoryExpanded(true)} aria-haspopup="dialog">展开记录 <ArrowRight aria-hidden="true" /></button></div>
+              {recentTracks.length ? <div className="home-recent-list">{recentTracks.slice(0, 6).map(({ track, playedAt }, index) => <button key={track.id} className="home-recent-track" onClick={() => onPickTrack(track.id)} aria-label={`播放 ${track.title}`}><span className="home-recent-index">{String(index + 1).padStart(2, "0")}</span><span className="home-recent-art"><CoverArt track={track} className="size-full rounded-[inherit]" /></span><span className="home-recent-meta"><strong className="home-recent-title"><CopyableTrackText track={track} field="title">{track.title}</CopyableTrackText></strong></span><span className="home-recent-artist"><CopyableTrackText track={track} field="artist">{track.artist}</CopyableTrackText></span><time className="home-recent-date" dateTime={new Date(playedAt).toISOString()}>{playedAtLabel(playedAt)}</time><span className="home-card-play"><Play className="fill-current" aria-hidden="true" /></span></button>)}</div> : <div className="home-recent-empty"><span className="home-empty-disc"><Disc3 aria-hidden="true" /></span><span><strong>下一首歌，就是故事的开始</strong><small>开始听一首歌，这里会记住你喜欢的声音。</small></span><button onClick={() => onNavigate("local")}>开始聆听 <ArrowRight aria-hidden="true" /></button></div>}
             </section>
           </div>
           <TodayListening snapshot={snapshot} />
         </div>
       </div>
+      <dialog ref={historyDialogRef} className="recent-history-dialog" aria-labelledby="recent-history-title" onCancel={() => setHistoryExpanded(false)} onClose={() => setHistoryExpanded(false)}>
+        <div className="mb-4 flex items-center justify-between gap-3"><h2 id="recent-history-title" className="text-xl font-semibold">最近播放</h2><div className="flex items-center gap-3"><button className="text-sm text-neutral-500" onClick={() => { setHistoryExpanded(false); onNavigate("history"); }}>全部历史</button><button aria-label="关闭最近播放" className="rounded-full p-2 hover:bg-neutral-950/5" onClick={() => setHistoryExpanded(false)}><X className="size-5" /></button></div></div>
+        <div className="home-recent-list">{historyExpanded && recentTracks.map(({ track, playedAt }, index) => <button key={track.id} className="home-recent-track" onClick={() => onPickTrack(track.id)} aria-label={`播放 ${track.title}`}><span className="home-recent-index">{String(index + 1).padStart(2, "0")}</span><span className="home-recent-art"><CoverArt track={track} className="size-full rounded-[inherit]" /></span><span className="home-recent-meta"><strong className="home-recent-title"><CopyableTrackText track={track} field="title">{track.title}</CopyableTrackText></strong></span><span className="home-recent-artist"><CopyableTrackText track={track} field="artist">{track.artist}</CopyableTrackText></span><time className="home-recent-date" dateTime={new Date(playedAt).toISOString()}>{playedAtLabel(playedAt)}</time><span className="home-card-play"><Play className="fill-current" aria-hidden="true" /></span></button>)}</div>
+        {!recentTracks.length && <p className="py-8 text-center text-sm text-neutral-500">暂无播放记录</p>}
+      </dialog>
     </div>
   );
 }

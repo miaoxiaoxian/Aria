@@ -135,6 +135,9 @@ async function createMediaSessionArtwork(url: string, signal: AbortSignal): Prom
 }
 
 export default function App() {
+  useEffect(() => {
+    try { document.documentElement.classList.toggle("perf-lite", localStorage.getItem("aria-perf-mode") === "true"); } catch { /* Optional preference. */ }
+  }, []);
   const [initialPlayerCache] = useState(() => {
     migrateBilibiliLyricsCache();
     return readCachedPlayerState();

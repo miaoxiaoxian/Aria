@@ -9,6 +9,7 @@ import { Metric } from "@/components/music/shared";
 import { api, type ApiLibraryWatchState, type NeteaseAccountSummary, type NeteaseQrStart, type SourceAccountSummary, type SourceManifestInfo, type UpdateState } from "@/lib/api";
 import { SourceLogo, type SourceLogoOption } from "@/components/music/SourceLogos";
 import type { NativeAudioState } from "@/lib/audioTypes";
+import { DiagnosticsSettings } from "./DiagnosticsSettings";
 import { AdvancedAudioSettings } from "./AdvancedAudioSettings";
 import type { DsdPcmRate } from "@/lib/playerPresentation";
 import type { AudioOutputMode } from "@/lib/playerPresentation";
@@ -589,6 +590,7 @@ export function SettingsPanel({
             </div>
           </section>
           <AdvancedAudioSettings rate={dsdPcmRate} onRateChange={onDsdPcmRateChange} exclusive={dsdExclusive} onExclusiveChange={onDsdExclusiveChange} supported={nativeAudioSupported} state={nativeAudioState} />
+          <DiagnosticsSettings />
           <UpdateCard />
           <section className="rounded-[1.25rem] border border-white/70 bg-white/62 p-4 shadow-sm lg:col-span-2">
             <div className="flex items-center justify-between gap-3">
