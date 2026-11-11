@@ -987,6 +987,7 @@ export default function App() {
   const {
     audioRef,
     analyserRef,
+    stereoAnalysersRef,
     audioOutputDevices,
     nativeAudioSupported,
     nativeAudioState,
@@ -2516,6 +2517,7 @@ export default function App() {
                   onMasterQualityEnabledChange={setMasterQualityEnabled}
                   exclusiveMode={exclusiveMode}
                   durationSeconds={durationSeconds}
+                  stereoAnalysersRef={stereoAnalysersRef}
                   analyserRef={analyserRef}
                   visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
                   visualizerActive={pageVisible && !immersiveOpen && activeView === "player"}
@@ -2958,6 +2960,7 @@ export default function App() {
               playing={playing}
               visualizerPlaying={visualizerPlaying}
               durationSeconds={durationSeconds}
+              stereoAnalysersRef={stereoAnalysersRef}
               analyserRef={analyserRef}
               visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
               volume={volume}

@@ -576,3 +576,11 @@ textarea::selection,
     animation: none;
   }
 }
+
+.player-analysis-title { font-size: clamp(1.6rem, 4cqi, 2.5rem); }
+.immersive-analysis-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: auto repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin-top: 1rem; height: min(56vh, 760px); min-height: 260px; flex-shrink: 1; }
+.immersive-analysis-layout .immersive-analysis-content { grid-template-columns: minmax(0, 0.65fr) minmax(0, 1.35fr); gap: 1.5rem; }
+.immersive-analysis-layout .immersive-analysis-content h1 { font-size: clamp(1.25rem, 2vw, 2rem); }
+.immersive-analysis-layout .immersive-analysis-content p { font-size: 0.85rem; margin-top: 0.25rem; }
+@media (max-height: 750px) { .immersive-analysis-grid { height: 48vh; min-height: 200px; } }
+@media (max-width: 900px) { .immersive-analysis-layout .immersive-analysis-content { display: flex; } .immersive-analysis-grid { height: 48vh; } }

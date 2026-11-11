@@ -21,6 +21,8 @@ import { AriaIcon, ariaVolumeIcon } from "@/components/icons/aria";
 import { AddToPlaylistButton } from "./PlaylistActions";
 import { WordLyricText } from "./WordLyricText";
 import { getLyricStartTime } from "@/lib/lyricTiming";
+import { AnalysisPanel, AnalysisMenu, ImmersiveAnalysisGrid, useAnalysisMode } from "./AnalysisPanel";
+import type { StereoAnalysers } from "@/lib/audioAnalysis";
 import { SpectrumCanvas } from "@/components/music/SpectrumCanvas";
 import { CopyableTrackText, CoverArt } from "@/components/music/shared";
 import { VideoStage } from "@/components/music/VideoStage";
@@ -322,6 +324,7 @@ export function PlayerSurface({
   exclusiveMode,
   durationSeconds,
   analyserRef,
+  stereoAnalysersRef,
   visualizerMode,
   lyricDisplayMode,
   onLyricDisplayModeChange,
@@ -368,6 +371,7 @@ export function PlayerSurface({
   exclusiveMode: boolean;
   durationSeconds: number;
   analyserRef: { current: AnalyserNode | null };
+  stereoAnalysersRef: StereoAnalysers;
   visualizerMode: AudioOutputMode;
   lyricDisplayMode: "original" | "bilingual";
   onLyricDisplayModeChange: (mode: "original" | "bilingual") => void;
@@ -380,6 +384,8 @@ export function PlayerSurface({
   const availableLevels = activeTrack.availableLevels ?? [];
   const qualitySwitchableSource = activeTrack.source === "netease" || activeTrack.source === "qq" || activeTrack.source === "bilibili";
   const hasKnownQualityLevels = qualitySwitchableSource && availableLevels.length > 0;
+  const [analysisMode, setAnalysisMode] = useAnalysisMode();
+  const lastAnalysisRef = useRef<Exclude<typeof analysisMode, "original">>(analysisMode === "original" ? "levels" : analysisMode);
   const [artworkMenuPosition, setArtworkMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [songOptionsOpen, setSongOptionsOpen] = useState(false);
   const [encyclopediaOpen, setEncyclopediaOpen] = useState(false);
@@ -617,6 +623,7 @@ export function PlayerSurface({
                 <p className="mt-1 text-xs font-medium leading-5 text-neutral-600">{formatAudioDetail(activeTrack)} <span className="text-neutral-400">· {activeTrack.duration}</span></p>
               </div>
               <div className="ml-auto flex items-center gap-2">
+                <Button variant="glass" size="sm" aria-label="切换原频谱与分析" aria-pressed={analysisMode !== "original"} onClick={() => { if (analysisMode === "original") setAnalysisMode(lastAnalysisRef.current); else { lastAnalysisRef.current = analysisMode; setAnalysisMode("original"); } }}>{analysisMode === "original" ? "频响" : "分析"}</Button>
                 {activeTrack.source === "netease" && /^\d{1,20}$/.test(activeTrack.providerId ?? activeTrack.id.replace(/^netease:/, "")) && <Button variant="glass" size="icon" aria-label="歌曲百科" title="歌曲百科与制作人员" onClick={() => setEncyclopediaOpen(true)}><BookOpen /></Button>}
                 <AddToPlaylistButton track={activeTrack} />
                 <div className="relative">
@@ -707,7 +714,7 @@ export function PlayerSurface({
               </div>
             ) : (
               <>
-                <h1 className="player-track-title mt-6 font-semibold text-neutral-950" title={activeTrack.title}>
+                <h1 className="player-track-title mt-4 player-analysis-title font-semibold text-neutral-950" title={activeTrack.title}>
                   <CopyableTrackText track={activeTrack} field="title">{activeTrack.title}</CopyableTrackText>
                 </h1>
                 <p className="mt-3 truncate text-xl text-neutral-500">
@@ -720,7 +727,10 @@ export function PlayerSurface({
 
           <div className="mt-4 shrink-0">
             <div className="px-1">
-              <SpectrumCanvas
+              {analysisMode !== "original" ? <>
+                <div className="mb-2"><AnalysisMenu mode={analysisMode} onChange={setAnalysisMode} includeOriginal={false} className="h-7 rounded-full border border-white/60 bg-white/60 px-3 text-xs text-neutral-600" /></div>
+                <AnalysisPanel mode={analysisMode} onChange={setAnalysisMode} analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} trackId={activeTrack.id} hideTabs />
+              </> : <SpectrumCanvas
                 analyserRef={analyserRef}
                 playing={visualizerPlaying}
                 active={visualizerActive}
@@ -728,7 +738,7 @@ export function PlayerSurface({
                 fallback={activeTrack.waveform}
                 outputMode={visualizerMode}
                 outputVolume={volume}
-              />
+              />}
               <PlaybackProgress
                 palette={palette}
                 durationSeconds={durationSeconds}
@@ -858,6 +868,7 @@ export function ImmersivePlayerView({
   visualizerPlaying,
   durationSeconds,
   analyserRef,
+  stereoAnalysersRef,
   visualizerMode,
   volume,
   onVolumeChange,
@@ -887,6 +898,7 @@ export function ImmersivePlayerView({
   visualizerPlaying: boolean;
   durationSeconds: number;
   analyserRef: { current: AnalyserNode | null };
+  stereoAnalysersRef: StereoAnalysers;
   visualizerMode: AudioOutputMode;
   volume: number;
   onVolumeChange: (volume: number) => void;
@@ -910,6 +922,7 @@ export function ImmersivePlayerView({
   onVideoError: (message: string) => void;
   videoActive: boolean;
 }) {
+  const [view, setView] = useState<"lyrics" | "analysis">(() => { try { return localStorage.getItem("aria-immersive-view") === "analysis" ? "analysis" : "lyrics"; } catch { return "lyrics"; } });
   const currentTime = usePlaybackTime();
   const resolvedDuration = durationSeconds || parseDuration(activeTrack.duration);
   const progressFraction = resolvedDuration ? Math.min(1, Math.max(0, currentTime / resolvedDuration)) : 0;
@@ -1036,11 +1049,12 @@ export function ImmersivePlayerView({
               background: `radial-gradient(circle at 24% 24%, ${colorWithAlpha(palette.primary, 0.34)} 0, transparent 36%), radial-gradient(circle at 80% 76%, ${colorWithAlpha(palette.secondary, 0.24)} 0, transparent 34%), linear-gradient(125deg, #080910, #10131d 48%, #07080c)`,
             }}
           />
-          <div className="relative z-10 grid h-full grid-rows-[auto_minmax(0,1fr)_auto] px-6 py-6 lg:px-10 2xl:px-14">
+          <div className={cn("relative z-10 grid h-full grid-rows-[auto_minmax(0,1fr)_auto] px-6 py-6 lg:px-10 2xl:px-14", view === "analysis" && "immersive-analysis-layout")}>
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-white/40">Immersive</p>
                 <p className="mt-1 truncate text-sm text-white/55">{sourceLabel[activeTrack.source]} · {formatAudioDetail(activeTrack)}</p>
+                <div role="group" aria-label="沉浸显示模式" className="mt-3 inline-flex rounded-full border border-white/15 bg-white/5 p-1">{(["lyrics", "analysis"] as const).map(mode => <button key={mode} aria-pressed={view === mode} className={cn("rounded-full px-3 py-1 text-xs", view === mode ? "bg-white/90 text-neutral-900" : "text-white/60")} onClick={() => { setView(mode); try { localStorage.setItem("aria-immersive-view", mode); } catch { /* Optional persistence. */ } }}>{mode === "lyrics" ? "歌词" : "分析"}</button>)}</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 {activeTrack.videoUrl && (
@@ -1060,7 +1074,7 @@ export function ImmersivePlayerView({
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-8 2xl:gap-12">
+            <div className="immersive-analysis-content flex min-h-0 flex-1 flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-8 2xl:gap-12">
               <div className="flex min-w-0 items-center gap-4 lg:block">
                 <div className="size-20 shrink-0 overflow-hidden rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.4)] lg:mx-auto lg:aspect-square lg:h-auto lg:w-full lg:max-w-[min(46vh,28rem)] lg:rounded-[2rem] lg:shadow-[0_42px_140px_rgba(0,0,0,0.46)]">
                   <CoverArt track={activeTrack} className="size-full" fit="cover" large />
@@ -1087,7 +1101,7 @@ export function ImmersivePlayerView({
                   <p className="mt-1 truncate text-sm text-white/35">{activeTrack.album}</p>
                 </div>
 
-                <div className="no-scrollbar mt-2 min-h-0 overflow-y-auto pr-2 lg:mt-6">
+                {view === "analysis" ? <ImmersiveAnalysisGrid analysersRef={stereoAnalysersRef} playing={visualizerPlaying} active={visualizerActive} nativeCopy={visualizerMode !== "system"} trackId={activeTrack.id} /> : <div className="no-scrollbar mt-2 min-h-0 overflow-y-auto pr-2 lg:mt-6">
                   <div className="space-y-1.5">
                     {visibleLyrics.map((line, index) => {
                       const originalIndex = Math.max(0, activeLyricIndex - 2) + index;
@@ -1116,12 +1130,12 @@ export function ImmersivePlayerView({
                       );
                     })}
                   </div>
-                </div>
+                </div>}
               </div>
             </div>
 
             <div className="mx-auto mt-4 w-full max-w-6xl">
-              <SpectrumCanvas
+              {view === "lyrics" && <SpectrumCanvas
                 analyserRef={analyserRef}
                 playing={visualizerPlaying}
                 active={visualizerActive}
@@ -1129,7 +1143,7 @@ export function ImmersivePlayerView({
                 fallback={activeTrack.waveform}
                 outputMode={visualizerMode}
                 outputVolume={volume}
-              />
+              />}
               <input
                 aria-label="沉浸播放进度"
                 type="range"

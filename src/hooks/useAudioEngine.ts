@@ -124,6 +124,9 @@ export function useAudioEngine(options: {
   const audioRef = useRef<HTMLAudioElement>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const stereoAnalysersRef = useRef<readonly [AnalyserNode, AnalyserNode] | null>(null);
+  const analysisInputRef = useRef<GainNode | null>(null);
+  const analysisSplitterRef = useRef<ChannelSplitterNode | null>(null);
   const audioSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
   const nativeSilenceGainRef = useRef<GainNode | null>(null);
   const normalizerRef = useRef<AudioWorkletNode | null>(null);
@@ -750,13 +753,19 @@ export function useAudioEngine(options: {
       analyserRef.current = context.createAnalyser();
       configureSpectrumAnalyser(analyserRef.current);
       audioSourceRef.current.connect(analyserRef.current);
+      const input = context.createGain();
+      input.channelCount = 2; input.channelCountMode = "explicit"; input.channelInterpretation = "speakers";
+      const splitter = context.createChannelSplitter(2); input.connect(splitter);
+      const channels = [context.createAnalyser(), context.createAnalyser()] as const;
+      channels.forEach((channel, index) => { channel.fftSize = 8192; channel.smoothingTimeConstant = 0.35; splitter.connect(channel, index); });
+      analysisInputRef.current = input; analysisSplitterRef.current = splitter; stereoAnalysersRef.current = channels;
     }
 
     if (equalizerFiltersRef.current.length !== options.equalizerBands.length) {
       equalizerFiltersRef.current.forEach(node => node.disconnect());
       equalizerFiltersRef.current = [];
       analyserOutputModeRef.current = null;
-      // A fixed 10-band peaking chain always sits after the analyser. A
+      // The selected 10/31-band peaking chain sits after the analyser. A
       // disabled EQ simply runs at 0 dB, which avoids clicks and graph
       // rebuilds while the user toggles it.
       equalizerFiltersRef.current = frequenciesForBands(options.equalizerBands).map((frequency) => {
@@ -822,6 +831,7 @@ export function useAudioEngine(options: {
         equalizerOutput.connect(outputGain);
         outputGain.connect(context.destination);
       }
+      if (analysisInputRef.current) equalizerOutput.connect(analysisInputRef.current);
       analyserOutputModeRef.current = desiredOutputMode;
     }
     if (nativePlaybackEnabled) {
@@ -877,6 +887,9 @@ export function useAudioEngine(options: {
       }
       audioSourceRef.current = null;
       analyserRef.current = null;
+      analysisInputRef.current?.disconnect(); analysisInputRef.current = null;
+      analysisSplitterRef.current?.disconnect(); analysisSplitterRef.current = null;
+      stereoAnalysersRef.current?.forEach(channel => channel.disconnect()); stereoAnalysersRef.current = null;
       nativeSilenceGainRef.current = null;
       normalizerRef.current?.disconnect();
       normalizerRef.current = null;
@@ -949,6 +962,7 @@ export function useAudioEngine(options: {
   return {
     audioRef,
     analyserRef,
+    stereoAnalysersRef,
     audioOutputDevices,
     nativeAudioSupported,
     nativeAudioState,
