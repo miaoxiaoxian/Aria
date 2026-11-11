@@ -39,7 +39,9 @@ describe("equalizer settings", () => {
       expect(preset.bands).toHaveLength(equalizerFrequencies.length);
       expect(preset.bands.every((gain) => Math.abs(gain) <= maxEqualizerGain)).toBe(true);
     }
-    expect(equalizerPresetBands("night")).toEqual(equalizerPresets.find((preset) => preset.id === "night")?.bands);
+    expect(equalizerPresets.some((preset) => preset.label === "深夜")).toBe(false);
+    expect(equalizerPresetBands("electronic")).toEqual([4, 3, 1, 0, -2, 1, 2, 3, 4, 4]);
+    expect(equalizerPresetBands("loudness")).toEqual([6, 5, 3, 1, 0, -1, -1, 1, 3, 5]);
     expect(defaultEqualizerSettings()).toMatchObject({ enabled: false, preset: "flat" });
   });
 

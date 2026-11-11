@@ -23,7 +23,7 @@ function migrateStorage() {
   }
 }
 
-export type EqualizerPresetId = "flat" | "pop" | "rock" | "vocal" | "bass" | "night" | "custom";
+export type EqualizerPresetId = "flat" | "pop" | "rock" | "vocal" | "bass" | "electronic" | "loudness" | "custom";
 
 export type EqualizerSettings = {
   enabled: boolean;
@@ -37,7 +37,8 @@ export const equalizerPresets: Array<{ id: EqualizerPresetId; label: string; des
   { id: "rock", label: "摇滚", description: "厚实低频与吉他存在感", bands: [4, 3, 2, 0, -1, 1, 3, 4, 3, 2] },
   { id: "vocal", label: "人声", description: "突出中频与咬字细节", bands: [-2, -1, 0, 2, 4, 4, 2, 0, -1, -2] },
   { id: "bass", label: "低音", description: "更深的低频与下潜", bands: [6, 5, 3, 1, 0, 0, -1, -1, 0, 0] },
-  { id: "night", label: "深夜", description: "柔和耐听，降低高频刺激", bands: [2, 1, 1, 0, 0, -1, -2, -3, -4, -5] },
+  { id: "electronic", label: "电子", description: "强劲低频与明亮高频", bands: [4, 3, 1, 0, -2, 1, 2, 3, 4, 4] },
+  { id: "loudness", label: "等响度", description: "小音量下补足两端，接近等响曲线", bands: [6, 5, 3, 1, 0, -1, -1, 1, 3, 5] },
 ];
 
 const equalizerStorageKey = "aria-equalizer-settings-v1";
@@ -68,7 +69,7 @@ export function readCachedEqualizerSettings(): EqualizerSettings {
     const parsed = JSON.parse(raw) as Partial<EqualizerSettings>;
     const preset = equalizerPresets.some((item) => item.id === parsed.preset) || parsed.preset === "custom"
       ? parsed.preset as EqualizerPresetId
-      : "flat";
+      : (parsed.preset as string) === "night" ? "custom" : "flat";
     return {
       enabled: Boolean(parsed.enabled),
       preset,
