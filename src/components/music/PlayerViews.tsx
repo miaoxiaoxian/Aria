@@ -382,7 +382,8 @@ export function PlayerSurface({
   const themePrimary = colorWithAlpha(palette.primary, 0.34);
   const themeSecondary = colorWithAlpha(palette.secondary, 0.24);
   const themeSoft = colorWithAlpha(palette.primary, 0.12);
-  const resolvedQualityLevel = activeTrack.currentLevel ?? qualityLevel;
+  // The selector represents the requested level; cached stream metadata may be stale.
+  const resolvedQualityLevel = qualityLevel;
   const availableLevels = activeTrack.availableLevels ?? [];
   const qualitySwitchableSource = activeTrack.source === "netease" || activeTrack.source === "qq" || activeTrack.source === "bilibili";
   const hasKnownQualityLevels = qualitySwitchableSource && availableLevels.length > 0;
@@ -841,6 +842,7 @@ export function PlayerSurface({
                         !qualitySwitchableSource || (hasKnownQualityLevels && option.value !== "standard" && !availableLevels.includes(option.value)) ? "opacity-45" : undefined,
                       )}
                       disabled={!qualitySwitchableSource || (hasKnownQualityLevels && option.value !== "standard" && !availableLevels.includes(option.value))}
+                      aria-pressed={resolvedQualityLevel === option.value}
                       onClick={() => onQualityLevelChange(option.value)}
                     >
                       {option.label}
