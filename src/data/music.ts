@@ -8,6 +8,7 @@ import {
   Home,
   Music2,
   Radar,
+  Settings2,
 } from "lucide-react";
 
 import type { LyricLine } from "../lib/lyricTypes";
@@ -91,6 +92,7 @@ export const navItems = [
   { id: "liked" as const, label: "我喜欢", icon: Heart },
   { id: "history" as const, label: "播放历史", icon: History },
   { id: "playlists" as const, label: "歌单", icon: Cloud },
+  { id: "settings" as const, label: "设置", icon: Settings2 },
   { id: "artists" as const, label: "歌手", icon: Music2 },
   { id: "explore" as const, label: "探索", icon: Compass },
   { id: "daily" as const, label: "每日推荐", icon: Compass },

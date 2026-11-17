@@ -2286,7 +2286,7 @@ export default function App() {
           </div>
 
           <div className="app-nav-slot" style={noDragRegionStyle}>
-            <AppNavigation activeView={activeView} onPick={(id) => { setQuery(""); setSelectedUser(null); setSelectedAlbum(null); if (id === "playlists") { closePlaylist(); localPlaylists.setSelectedId(null); playlistReturnRef.current = null; setPlaylistSourceIntent(null); } setActiveView(id); }} />
+            <AppNavigation activeView={activeView} onPick={(id) => { setQuery(""); setSelectedUser(null); setSelectedAlbum(null); if (id === "settings" && activeView !== "settings") setSettingsReturnView(activeView); if (id === "playlists") { closePlaylist(); localPlaylists.setSelectedId(null); playlistReturnRef.current = null; setPlaylistSourceIntent(null); } setActiveView(id); }} />
           </div>
 
           <div

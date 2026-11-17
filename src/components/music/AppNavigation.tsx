@@ -1,9 +1,9 @@
 import { navItems, type ViewId } from "@/data/music";
 import { cn } from "@/lib/utils";
 
-// These are the six places a listener visits most often. Advanced tools live
+// Primary destinations share the same header navigation. Advanced tools live
 // in the floating secondary navigation so the header remains a single row.
-const primaryIds: ViewId[] = ["home", "player", "local", "liked", "history", "playlists"];
+const primaryIds: ViewId[] = ["home", "player", "local", "liked", "history", "playlists", "settings"];
 
 export function AppNavigation({ activeView, onPick }: { activeView: ViewId; onPick: (id: ViewId) => void }) {
   const links = primaryIds
