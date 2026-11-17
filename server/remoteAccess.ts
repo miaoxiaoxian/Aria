@@ -54,8 +54,8 @@ export function loopbackAddress(requested: string | undefined): boolean {
   return (
     requested === "127.0.0.1" ||
     requested === "::1" ||
-    requested === "::ffff:127.0.0.1" ||
-    requested.endsWith(".127.0.0.1")
+    requested === "::ffff:127.0.0.1"
+
   );
 }
 

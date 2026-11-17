@@ -1450,6 +1450,7 @@ function RemoteAccessSettings() {
   const desktopReady = Boolean(window.ariaDesktop?.getRemoteAccess);
   const [info, setInfo] = useState<RemoteAccessInfo | null>(null);
   const [busy, setBusy] = useState(false);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState<"token" | "address" | null>(null);
@@ -1461,7 +1462,7 @@ function RemoteAccessSettings() {
       .then((value) => {
         if (mounted) setInfo(value);
       })
-      .catch(() => undefined);
+      .catch(() => { if (mounted) setRemoteError("无法读取远程访问状态，请重新打开设置重试。"); });
     return () => {
       mounted = false;
     };
@@ -1500,6 +1501,7 @@ function RemoteAccessSettings() {
   async function toggleRemoteAccess() {
     if (!info || busy) return;
     setBusy(true);
+    setRemoteError(null);
     setRestarting(true);
     try {
       const updated = await window.ariaDesktop?.setRemoteAccess?.(!info.enabled);
@@ -1511,9 +1513,23 @@ function RemoteAccessSettings() {
           addresses: current?.addresses ?? [],
         }));
       }
+      if (!updated) throw new Error("无法保存远程访问设置");
+      const deadline = Date.now() + 15000;
+      let ready = false;
+      while (Date.now() < deadline) {
+        try {
+          const response = await fetch(api.resolveUrl("/api/remote-access"), { signal: AbortSignal.timeout(1000), cache: "no-store" });
+          const actual = response.ok ? await response.json() as RemoteAccessInfo : null;
+          if (actual?.enabled === updated.enabled) { setInfo(actual); ready = true; break; }
+        } catch { /* The backend is restarting. */ }
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+      if (!ready) throw new Error("设置已保存，但服务尚未就绪，请稍后重新打开设置检查。");
+    } catch (error) {
+      setRemoteError(error instanceof Error ? error.message : "远程访问切换失败，请重试。");
     } finally {
       setBusy(false);
-      window.setTimeout(() => setRestarting(false), 2600);
+      setRestarting(false);
     }
   }
 
@@ -1554,12 +1570,13 @@ function RemoteAccessSettings() {
         开启后,同一局域网内的 Aria 手机版可以连接这台电脑,同步网易云歌单并串流本地曲库。连接令牌只走明文 HTTP,请仅在可信的家用网络开启。
       </p>
 
-      {!info && <p className="mt-4 text-sm text-neutral-400">读取远程访问状态…</p>}
+      {remoteError && <p role="alert" className="mt-3 text-xs text-rose-600">{remoteError}</p>}
+      {!info && !remoteError && <p className="mt-4 text-sm text-neutral-400">读取远程访问状态…</p>}
 
       {info && restarting && (
         <p className="mt-3 flex items-center gap-2 text-xs text-sky-700">
           <RefreshCw className="size-3.5 animate-spin" />
-          后端正在以新配置重启,约 2 秒后生效…
+          正在重启后端并确认配置生效…
         </p>
       )}
 

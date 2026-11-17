@@ -19,6 +19,7 @@ describe("remote access", () => {
     expect(loopbackAddress("192.168.1.20")).toBe(false);
     expect(loopbackAddress("::ffff:192.168.1.20")).toBe(false);
     expect(loopbackAddress(undefined)).toBe(false);
+    expect(loopbackAddress("192.168.1.127.0.0.1")).toBe(false);
   });
   it("reads the token from a bearer header or the query string", () => {
     expect(extractRequestToken({ authorization: "Bearer abc" }, undefined)).toBe("abc");
