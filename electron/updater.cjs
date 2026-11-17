@@ -117,7 +117,7 @@ function friendlyUpdateError(error) {
 function setupUpdates(options = {}) {
   writeLog = options.writeLog ?? (() => {});
   const macAutoUpdate = process.env.ARIA_MAC_AUTO_UPDATE === "1";
-  const supported = process.platform === "win32" || (process.platform === "darwin" && macAutoUpdate);
+  const supported = false; // Custom builds must not install upstream releases.
   update({
     supported,
     currentVersion: app.getVersion(),
