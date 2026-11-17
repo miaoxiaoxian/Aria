@@ -216,6 +216,7 @@ export default function App() {
   });
   const [keyboardShortcuts, setKeyboardShortcuts] = useState<KeyboardShortcuts>(readKeyboardShortcuts);
   const [query, setQuery] = useState("");
+  const searchActive = query.trim().length > 0;
   const [exploreTab, setExploreTab] = useState<"styles" | "radio" | "discover">("styles");
   const [exploreStyleGroups, setExploreStyleGroups] = useState<ProviderStyleGroup[]>([]);
   const [exploreStyleId, setExploreStyleId] = useState<string | null>(null);
@@ -1029,7 +1030,7 @@ export default function App() {
     dsdPcmRate,
     dsdExclusive,
     pageVisible,
-    analyserEnabled: pageVisible && (activeView === "player" || immersiveOpen),
+    analyserEnabled: pageVisible && ((activeView === "player" && !searchActive) || immersiveOpen),
     videoMode,
     pendingSeekRef,
     setPlaying,
@@ -2446,8 +2447,8 @@ export default function App() {
           className={cn(
             "app-content grid grid-cols-1 min-h-0 flex-1 gap-4 p-4 2xl:gap-5 2xl:p-5",
             activeView === "home" && !query.trim() && "app-content-home",
-            activeView === "player" && "overflow-hidden",
-            activeView === "settings" || activeView === "home"
+            activeView === "player" && !searchActive && "overflow-hidden",
+            searchActive || activeView === "settings" || activeView === "home"
               ? "grid-cols-1"
               : activeView === "player"
                 ? "lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_minmax(380px,18vw)]"
@@ -2457,10 +2458,10 @@ export default function App() {
           <div
             className={cn(
               "h-full min-h-0 min-w-0 overflow-hidden",
-              activeView !== "player" && "pointer-events-none fixed left-0 top-0 w-[min(92vw,1100px)] -translate-x-[200%] opacity-0",
+              (activeView !== "player" || searchActive) && "pointer-events-none fixed left-0 top-0 w-[min(92vw,1100px)] -translate-x-[200%] opacity-0",
             )}
-            aria-hidden={activeView !== "player"}
-            inert={activeView !== "player"}
+            aria-hidden={activeView !== "player" || searchActive}
+            inert={activeView !== "player" || searchActive}
           >
 <PlayerSurface
                   activeTrack={activeTrack}
@@ -2531,7 +2532,7 @@ export default function App() {
                   stereoAnalysersRef={stereoAnalysersRef}
                   analyserRef={analyserRef}
                   visualizerMode={nativePlaybackEnabled ? audioOutputMode : "system"}
-                  visualizerActive={pageVisible && !immersiveOpen && activeView === "player"}
+                  visualizerActive={pageVisible && !immersiveOpen && activeView === "player" && !searchActive}
                   lyricDisplayMode={lyricDisplayMode}
                   onLyricDisplayModeChange={setLyricDisplayMode}
                   onSeek={seekTo}
@@ -2572,7 +2573,7 @@ export default function App() {
               className={cn(
                 "app-view min-h-0 min-w-0 scrollbar-thin",
                 activeView === "home" && !query.trim() && "app-view-home",
-                activeView === "player" && "hidden",
+                activeView === "player" && !searchActive && "hidden",
               )}
               style={{ willChange: "transform, opacity" }}
             >
@@ -2914,7 +2915,7 @@ export default function App() {
             </motion.div>
           </AnimatePresence>
 
-          {activeView === "settings" || activeView === "home" ? null : activeView === "player" ? (
+          {searchActive || activeView === "settings" || activeView === "home" ? null : activeView === "player" ? (
             <PlayerSidePanel
               playing={playing}
               mode={playerSideView}
