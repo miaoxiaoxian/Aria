@@ -1,3 +1,4 @@
+import { videoPlaybackEnabled } from "@/lib/features";
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ListMusic, Maximize2, Minus, Moon, Radio, Search, Settings2, Sparkles, Sun, UserRound, X } from "lucide-react";
@@ -151,7 +152,8 @@ export default function App() {
     initialPlayerCache.activeTrackId ?? cachedActiveTrackSnapshot?.id ?? idleTrack.id,
   );
   const [playing, setPlaying] = useState(false);
-  const [videoMode, setVideoMode] = useState(false);
+  const [requestedVideoMode, setVideoMode] = useState(false);
+  const videoMode = videoPlaybackEnabled && requestedVideoMode;
   const [videoQn, setVideoQn] = useState<number | null>(null);
   const [videoQualities, setVideoQualities] = useState<Array<{ id: number; label: string }>>([]);
   const [videoAudioQuality, setVideoAudioQuality] = useState<string | null>(null);
@@ -1186,7 +1188,7 @@ export default function App() {
   }
 
   function toggleVideoMode() {
-    if (!activeTrack.videoUrl) return;
+    if (!videoPlaybackEnabled || !activeTrack.videoUrl) return;
     commitActiveVideoTime();
     if (videoMode) pauseActiveVideo();
     pendingSeekRef.current = getPlaybackTime();

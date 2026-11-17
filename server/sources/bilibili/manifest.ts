@@ -19,6 +19,6 @@ export const bilibiliManifest: SourceManifest = {
     artistDetail: false,
     albumDetail: false,
     qualitySelection: true,
-    videoPlayback: true,
+    videoPlayback: false,
   },
 };

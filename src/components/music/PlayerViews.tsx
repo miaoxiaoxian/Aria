@@ -1,3 +1,4 @@
+import { videoPlaybackEnabled } from "@/lib/features";
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { motion } from "framer-motion";
 import { lazy, Suspense } from "react";
@@ -429,7 +430,7 @@ export function PlayerSurface({
     await onReplaceLocalArtwork(activeTrack.id, file);
   }
 
-  if (videoMode && activeTrack.videoUrl) {
+  if (videoPlaybackEnabled && videoMode && activeTrack.videoUrl) {
     return (
       <div
         className="player-surface relative flex h-full min-h-0 flex-col overflow-hidden rounded-[1.5rem] border border-white/55 p-5 shadow-[0_22px_70px_rgba(47,55,76,0.12)] sm:p-6"
@@ -586,7 +587,7 @@ export function PlayerSurface({
                   <p className="mt-2 text-sm text-neutral-600">从本地音乐、网易云或 QQ 音乐选择一首歌开始。</p>
                 </div>
               </div>
-            ) : videoMode && activeTrack.videoUrl ? (
+            ) : videoPlaybackEnabled && videoMode && activeTrack.videoUrl ? (
               <VideoStage
                 track={activeTrack}
                 src={videoUrlOverride}
@@ -689,7 +690,7 @@ export function PlayerSurface({
                   <AudioLines />
                   {equalizerEnabled && <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-violet-500" />}
                 </Button>
-                {activeTrack.videoUrl && (
+                {videoPlaybackEnabled && activeTrack.videoUrl && (
                   <Button
                     variant="glass"
                     size="sm"
@@ -930,7 +931,7 @@ export function ImmersivePlayerView({
   const lyrics = activeTrack.lyrics.length ? activeTrack.lyrics : [{ time: "00:00", text: "暂无歌词" }];
   const activeLyricIndex = getActiveLyricIndex(lyrics, currentTime);
   const visibleLyrics = lyrics.slice(Math.max(0, activeLyricIndex - 2), Math.min(lyrics.length, activeLyricIndex + 6));
-  const videoActiveMode = videoMode && Boolean(activeTrack.videoUrl);
+  const videoActiveMode = videoPlaybackEnabled && videoMode && Boolean(activeTrack.videoUrl);
   const timeLabel = currentTime > 0 ? formatDuration(currentTime) : "0:00";
 
   return (
@@ -1058,7 +1059,7 @@ export function ImmersivePlayerView({
                 <div role="group" aria-label="沉浸显示模式" className="mt-3 inline-flex rounded-full border border-white/15 bg-white/5 p-1">{(["lyrics", "analysis"] as const).map(mode => <button key={mode} aria-pressed={view === mode} className={cn("rounded-full px-3 py-1 text-xs", view === mode ? "bg-white/90 text-neutral-900" : "text-white/60")} onClick={() => { setView(mode); try { localStorage.setItem("aria-immersive-view", mode); } catch { /* Optional persistence. */ } }}>{mode === "lyrics" ? "歌词" : "分析"}</button>)}</div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {activeTrack.videoUrl && (
+                {videoPlaybackEnabled && activeTrack.videoUrl && (
                   <Button
                     className="bg-white/10 text-white hover:bg-white/18"
                     size="icon"
